@@ -1,0 +1,52 @@
+# macOS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode and editor state
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcworkspace
+*.xcodeproj
+.vscode/
+.idea/
+*.swp
+*~
+
+# Build and release artifacts
+dist/
+release/
+*.app
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.dmg
+*.zip
+
+# Local runtime data, logs, and generated files
+*.log
+*.tmp
+tmp/
+.config/
+settings.json
+
+# Credentials and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+
+# FUSE mount ghosts (deleted-but-open inodes; never commit)
+.fuse_hidden*

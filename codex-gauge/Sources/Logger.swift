@@ -1,0 +1,62 @@
+import Foundation
+
+actor Logger {
+    static let shared = Logger()
+
+    nonisolated(unsafe) static var consoleEnabled: Bool = false
+
+    private let logFileURL: URL
+    private let dateFormatter: DateFormatter
+
+    private init() {
+        let logsDirectory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/codex-gauge/logs")
+
+        try? FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+
+        let dateString = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        logFileURL = logsDirectory.appendingPathComponent("codexgauge-\(dateString).log")
+
+        dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+
+        Task {
+            await log("CodexGauge started", level: .info)
+            await log("Log file: \(logFileURL.path)", level: .info)
+            await log("macOS Version: \(ProcessInfo.processInfo.operatingSystemVersionString)", level: .info)
+        }
+    }
+
+    enum LogLevel: String {
+        case debug = "DEBUG"
+        case info = "INFO"
+        case warning = "WARNING"
+        case error = "ERROR"
+    }
+
+    func log(_ message: String, level: LogLevel = .info, file: String = #file, function: String = #function, line: Int = #line) {
+        let timestamp = dateFormatter.string(from: Date())
+        let fileName = (file as NSString).lastPathComponent
+        let logMessage = "[\(timestamp)] [\(level.rawValue)] [\(fileName):\(line) \(function)] \(message)\n"
+
+        if Logger.consoleEnabled, let data = logMessage.data(using: .utf8) {
+            FileHandle.standardError.write(data)
+        }
+
+        if let data = logMessage.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logFileURL.path) {
+                if let fileHandle = try? FileHandle(forWritingTo: logFileURL) {
+                    fileHandle.seekToEndOfFile()
+                    fileHandle.write(data)
+                    try? fileHandle.close()
+                }
+            } else {
+                try? data.write(to: logFileURL)
+            }
+        }
+    }
+
+    nonisolated func getLogFilePath() -> String {
+        return logFileURL.path
+    }
+}
