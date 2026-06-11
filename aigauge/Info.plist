@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>AIGauge</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.aigauge.app</string>
+    <key>CFBundleName</key>
+    <string>AIGauge</string>
+    <key>CFBundleDisplayName</key>
+    <string>AIGauge</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <!-- Menu-bar / accessory app: no Dock icon, no main window. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- Permits launching the bundled CLIs (subprocesses inside the .app). -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>AIGauge runs the bundled ClaudeGauge and CodexGauge helpers to fetch usage.</string>
+</dict>
+</plist>
