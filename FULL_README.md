@@ -348,6 +348,6 @@ AIGauge/
 
 ## About
 
-Built by [vuba.one](https://vuba.one).
+Built by VUBA (dev@vuba.one) — [vuba.one](https://vuba.one).
 
 Released under MIT. No telemetry, no third-party services beyond the official Claude and ChatGPT/Codex APIs.

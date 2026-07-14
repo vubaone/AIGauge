@@ -107,6 +107,6 @@ MIT.
 
 ## About
 
-Built by [vuba.one](https://vuba.one). No telemetry, only calls claude.ai and chatgpt.com.
+Built by VUBA (dev@vuba.one) — [vuba.one](https://vuba.one). No telemetry, only calls claude.ai and chatgpt.com.
 
 Full docs · openclaw automation patterns · endpoint catalog · file layout → [FULL_README.md](FULL_README.md)

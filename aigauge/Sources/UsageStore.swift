@@ -206,6 +206,9 @@ final class UsageStore: ObservableObject {
         do {
             _ = try await BackendRunner.run(kind: .claude, args: args)
             lastActionMessage = "Claude refresh fired (~2 tokens). Re-checking usage…"
+            // Give the server a moment to register the started/extended window,
+            // then re-read so the on-screen usage windows show the new state.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
             await refreshClaude()
         } catch {
             lastActionMessage = "Claude refresh failed: \(error.localizedDescription)"
@@ -257,6 +260,9 @@ final class UsageStore: ObservableObject {
         do {
             _ = try await BackendRunner.run(kind: .codex, args: ["refresh", "--json"])
             lastActionMessage = "Codex refresh fired (~24 tokens). Re-checking usage…"
+            // Give the server a moment to register the started/extended window,
+            // then re-read so the on-screen usage windows show the new state.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
             await refreshCodex()
         } catch {
             lastActionMessage = "Codex refresh failed: \(error.localizedDescription)"

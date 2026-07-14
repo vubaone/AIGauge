@@ -363,14 +363,29 @@ final class MenuBarController: NSObject {
     }
 
     private func confirm(_ message: String, _ action: @escaping () -> Void) {
+        // Confirmation turned off (via "Don't ask again" or the General tab):
+        // send straight away.
+        guard AppSettings.shared.confirmQuotaRefresh else {
+            action()
+            return
+        }
+
         let alert = NSAlert()
         alert.messageText = "Trigger quota refresh"
         alert.informativeText = message
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Send")
         alert.addButton(withTitle: "Cancel")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Don't ask again"
         NSApp.activate(ignoringOtherApps: true)
+
         if alert.runModal() == .alertFirstButtonReturn {
+            // Only remember the suppression once the user has actually confirmed
+            // a send — future refreshes then skip the dialog.
+            if alert.suppressionButton?.state == .on {
+                AppSettings.shared.confirmQuotaRefresh = false
+            }
             action()
         }
     }

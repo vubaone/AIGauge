@@ -78,11 +78,48 @@ else
     echo "   (warning: resources/icon.png missing or sips/iconutil unavailable — no app icon)"
 fi
 
-# Ad-hoc sign (no developer ID needed). Required on Apple Silicon for the
-# bundle to launch without "is damaged" errors after copying around.
-echo "==> Ad-hoc signing the bundle"
-codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || \
-    echo "   (warning: codesign failed — app may need manual approval on first launch)"
+# --- Code signing ---
+# By default we ad-hoc sign (no cert needed) — fine for local use, but such a
+# build is NOT distributable. To make a signed, notarizable release, pass your
+# Developer ID identity via SIGN_ID, e.g.:
+#
+#   SIGN_ID="Developer ID Application: Your Name (TEAMID)" ./build.sh
+#
+# List your identities with:  security find-identity -v -p codesigning
+# Optionally point ENTITLEMENTS at an .entitlements file (not needed for a
+# plain hardened-runtime build of this app).
+SIGN_ID="${SIGN_ID:--}"
+
+CLAUDE_BIN="$APP_DIR/Contents/Resources/ClaudeGauge"
+CODEX_BIN="$APP_DIR/Contents/Resources/CodexGauge"
+
+if [ "$SIGN_ID" = "-" ]; then
+    # Ad-hoc sign. Required on Apple Silicon for the bundle to launch without
+    # "is damaged" errors after copying around. Local use only.
+    echo "==> Ad-hoc signing the bundle (local use only — not distributable)"
+    codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || \
+        echo "   (warning: codesign failed — app may need manual approval on first launch)"
+else
+    echo "==> Signing with Developer ID: $SIGN_ID"
+    # Sign nested Mach-O first (inner code before the container), each with the
+    # hardened runtime (--options runtime) and a secure timestamp — both are
+    # required for notarization. Avoid --deep; sign each piece explicitly.
+    for bin in "$CLAUDE_BIN" "$CODEX_BIN"; do
+        codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$bin"
+    done
+    # Sign the app bundle last; this also seals the main executable.
+    codesign --force --options runtime --timestamp \
+        ${ENTITLEMENTS:+--entitlements "$ENTITLEMENTS"} \
+        --sign "$SIGN_ID" "$APP_DIR"
+
+    echo "==> Verifying code signature"
+    codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+    # Gatekeeper assessment will only PASS after notarization; a rejection here
+    # is expected for a freshly-signed, not-yet-notarized build. Notarize via
+    # Xcode (Archive → Distribute App → Developer ID), or with notarytool.
+    spctl -a -vvv -t exec "$APP_DIR" 2>&1 || \
+        echo "   (spctl rejects until the app is notarized — expected)"
+fi
 
 # --- Zip the .app for easy sharing ---
 echo "==> Zipping $APP_DIR"
@@ -100,3 +137,7 @@ echo ""
 echo "Standalone CLIs (optional, separate from the .app):"
 echo "  $RELEASE_DIR/ClaudeGauge"
 echo "  $RELEASE_DIR/CodexGauge"
+echo ""
+echo "This script is for quick local (ad-hoc) builds. For a signed, notarized"
+echo "release to hand to others, use the Xcode project instead: open AIGauge.xcodeproj"
+echo "and Product → Archive → Distribute App → Developer ID (see XCODE.md)."

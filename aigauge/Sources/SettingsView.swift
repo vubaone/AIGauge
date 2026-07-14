@@ -9,6 +9,8 @@ struct SettingsView: View {
         TabView {
             GeneralTab()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            TrayTab()
+                .tabItem { Label("Tray", systemImage: "menubar.rectangle") }
             ClaudeTab()
                 .tabItem { Label("Claude", systemImage: "c.circle") }
             ServiceTab(service: .codex)
@@ -22,6 +24,70 @@ struct SettingsView: View {
 // MARK: - General tab
 
 struct GeneralTab: View {
+    @ObservedObject var settings = AppSettings.shared
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+            Section("Auto-refresh") {
+                Stepper(value: $settings.autoRefreshSeconds, in: 0...3600, step: 30) {
+                    Text("Every \(settings.autoRefreshSeconds)s (0 = off)")
+                }
+                Text("How often usage numbers are re-read in the background. This only checks usage — it never spends tokens.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+
+            Section("Confirmations") {
+                Toggle("Ask before sending a quota refresh", isOn: $settings.confirmQuotaRefresh)
+                Text("A quota refresh from the tray menu spends a few tokens. When on, AIGauge asks first; the dialog's “Don't ask again” also turns this off.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+
+            Section("Window behaviour") {
+                Toggle("Close button hides window (stays in tray)", isOn: $settings.closeToTray)
+                Toggle("Launch at login", isOn: $settings.launchAtLogin)
+                Text("Note: launch-at-login requires this binary to live in a stable location (e.g. /Applications). Toggle takes effect on next reboot.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("CLI paths (optional)") {
+                LabeledContent("ClaudeGauge:") {
+                    TextField("auto-discover", text: $settings.claudeGaugePath)
+                        .textFieldStyle(.roundedBorder)
+                }
+                LabeledContent("CodexGauge:") {
+                    TextField("auto-discover", text: $settings.codexGaugePath)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Text("Leave empty to auto-discover: AIGauge looks beside its own binary, then in sibling project .build/release/ directories, then in PATH.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            }
+            .formStyle(.grouped)
+
+            // Small, dim credit line pinned under the form.
+            HStack(spacing: 5) {
+                Text("Made by VUBA")
+                Text("·")
+                Link("dev@vuba.one", destination: URL(string: "mailto:dev@vuba.one")!)
+                Text("·")
+                Link("vuba.one", destination: URL(string: "https://vuba.one/")!)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .tint(.secondary)
+            .padding(.top, 3)
+            .padding(.bottom, 8)
+        }
+    }
+}
+
+// MARK: - Tray tab
+
+struct TrayTab: View {
     @ObservedObject var settings = AppSettings.shared
     @ObservedObject var store = UsageStore.shared
 
@@ -52,34 +118,6 @@ struct GeneralTab: View {
                 .pickerStyle(.radioGroup)
                 Text("Each chosen provider gets a section in the click-menu with short/long-term usage and a Refresh button.")
                     .font(.caption).foregroundColor(.secondary)
-            }
-
-            Section("Auto-refresh") {
-                Stepper(value: $settings.autoRefreshSeconds, in: 0...3600, step: 30) {
-                    Text("Every \(settings.autoRefreshSeconds)s (0 = off)")
-                }
-            }
-
-            Section("Window behaviour") {
-                Toggle("Close button hides window (stays in tray)", isOn: $settings.closeToTray)
-                Toggle("Launch at login", isOn: $settings.launchAtLogin)
-                Text("Note: launch-at-login requires this binary to live in a stable location (e.g. /Applications). Toggle takes effect on next reboot.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Section("CLI paths (optional)") {
-                LabeledContent("ClaudeGauge:") {
-                    TextField("auto-discover", text: $settings.claudeGaugePath)
-                        .textFieldStyle(.roundedBorder)
-                }
-                LabeledContent("CodexGauge:") {
-                    TextField("auto-discover", text: $settings.codexGaugePath)
-                        .textFieldStyle(.roundedBorder)
-                }
-                Text("Leave empty to auto-discover: AIGauge looks beside its own binary, then in sibling project .build/release/ directories, then in PATH.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -152,6 +190,8 @@ struct ServiceTab: View {
 
                 Spacer()
             }
+
+            AutoRefreshRow(serviceKey: AppSettings.codexOrderKey)
 
             if let msg = store.lastActionMessage {
                 Text(msg).font(.caption).foregroundColor(.secondary)
@@ -395,6 +435,8 @@ struct AccountSection: View {
                 .help("Sends a tiny private prompt from this account to start its 5-hour quota window.")
                 Spacer()
             }
+
+            AutoRefreshRow(serviceKey: account.id)
         }
         .padding(10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -490,6 +532,94 @@ struct AddClaudeAccountSheet: View {
         } else {
             dismiss()
         }
+    }
+}
+
+/// Per-service scheduled auto-refresh control: a checkbox, the label
+/// "Auto-refresh at", and a small HH:mm text field. When enabled, the
+/// AutoRefreshScheduler sends the token-spending "Refresh window" for this
+/// service once a day at the given time (catching up on wake if the Mac was
+/// asleep). `serviceKey` is a Claude account id or `AppSettings.codexOrderKey`.
+struct AutoRefreshRow: View {
+    let serviceKey: String
+
+    @ObservedObject private var settings = AppSettings.shared
+    @State private var timeDraft = ""
+    @State private var invalid = false
+
+    private var cfg: AutoRefreshConfig { settings.autoRefreshConfig(for: serviceKey) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Toggle(isOn: enabledBinding) {
+                    Text("Auto-refresh at")
+                }
+                .toggleStyle(.checkbox)
+                .fixedSize()
+
+                TextField("HH:mm, HH:mm, …", text: $timeDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                    .disabled(!cfg.enabled)
+                    .onSubmit { commit() }
+                    .onChange(of: timeDraft) { _ in invalid = false }
+            }
+            hint
+        }
+        .font(.caption)
+        .onAppear { timeDraft = cfg.time }
+        .onChange(of: cfg.time) { timeDraft = $0 }
+    }
+
+    @ViewBuilder
+    private var hint: some View {
+        if invalid {
+            Text("Use 24-hour HH:mm times, separated by commas — e.g. 06:00, 14:00")
+                .foregroundColor(.red)
+        } else if cfg.enabled, AutoRefreshScheduler.parseTimes(cfg.time) != nil {
+            Text("runs daily at \(cfg.time) · fires on wake if any were missed")
+                .foregroundColor(.secondary)
+        } else {
+            Text("24-hour; use commas for multiple times — e.g. 06:00, 10:00, 14:00")
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { cfg.enabled },
+            set: { on in
+                settings.updateAutoRefreshConfig(for: serviceKey) { $0.enabled = on }
+                if on {
+                    commit()   // validate/normalise whatever is currently typed
+                    AutoRefreshScheduler.shared.seedBaseline(for: serviceKey)
+                }
+            })
+    }
+
+    /// Validate + normalise the typed times (zero-pad, sort, de-dupe) and persist.
+    /// Blank clears the schedule; any malformed entry flags `invalid` and nothing
+    /// is saved.
+    private func commit() {
+        let trimmed = timeDraft.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            settings.updateAutoRefreshConfig(for: serviceKey) { $0.time = "" }
+            invalid = false
+            return
+        }
+        guard let list = AutoRefreshScheduler.parseTimes(trimmed) else {
+            invalid = true
+            return
+        }
+        let norm = Set(list.map { $0.hour * 60 + $0.minute })
+            .sorted()
+            .map { String(format: "%02d:%02d", $0 / 60, $0 % 60) }
+            .joined(separator: ", ")
+        timeDraft = norm
+        invalid = false
+        settings.updateAutoRefreshConfig(for: serviceKey) { $0.time = norm }
+        if cfg.enabled { AutoRefreshScheduler.shared.seedBaseline(for: serviceKey) }
     }
 }
 

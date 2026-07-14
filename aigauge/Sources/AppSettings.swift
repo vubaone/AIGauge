@@ -22,6 +22,17 @@ enum BackendSelection: String, CaseIterable, Identifiable {
 /// Back-compat alias — older code referred to this as TrayBackend.
 typealias TrayBackend = BackendSelection
 
+/// Per-service scheduled "auto-refresh at HH:mm" configuration.
+/// Stored keyed by service key: a Claude account id, or `AppSettings.codexOrderKey`
+/// for Codex. `lastFired` is the timeIntervalSince1970 of the last scheduled
+/// occurrence we already acted on — used to fire exactly once per occurrence
+/// and to coalesce occurrences missed while the Mac was asleep.
+struct AutoRefreshConfig: Codable, Equatable {
+    var enabled: Bool = false
+    var time: String = ""          // one or more "HH:mm" (24h), comma-separated; empty = unset
+    var lastFired: Double = 0      // timeIntervalSince1970 of last handled occurrence
+}
+
 /// Observable wrapper over UserDefaults. Bindings on this auto-persist.
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
@@ -61,6 +72,12 @@ final class AppSettings: ObservableObject {
     @Published var closeToTray: Bool {
         didSet { defaults.set(closeToTray, forKey: "closeToTray") }
     }
+    /// Whether to show the "Trigger quota refresh" confirmation before spending
+    /// tokens from the tray menu. The dialog's "Don't ask again" checkbox sets
+    /// this false; the General tab can turn it back on.
+    @Published var confirmQuotaRefresh: Bool {
+        didSet { defaults.set(confirmQuotaRefresh, forKey: "confirmQuotaRefresh") }
+    }
 
     // --- CLI overrides ---
     @Published var claudeGaugePath: String {
@@ -82,6 +99,12 @@ final class AppSettings: ObservableObject {
     /// end (in their original CLI order); unknown ids are ignored.
     @Published var accountOrder: [String] {
         didSet { defaults.set(accountOrder, forKey: "accountOrder") }
+    }
+
+    /// Per-service scheduled auto-refresh configs, keyed by service key
+    /// (Claude account id, or `codexOrderKey` for Codex). Persisted as JSON.
+    @Published var autoRefreshConfigs: [String: AutoRefreshConfig] {
+        didSet { persistAutoRefreshConfigs() }
     }
 
     /// Distinct fallback colors handed out to accounts that have no explicit
@@ -110,12 +133,41 @@ final class AppSettings: ObservableObject {
         self.autoRefreshSeconds = defaults.object(forKey: "autoRefreshSeconds") as? Int ?? 60
         self.launchAtLogin     = defaults.bool(forKey: "launchAtLogin")
         self.closeToTray       = (defaults.object(forKey: "closeToTray") as? Bool) ?? true
+        self.confirmQuotaRefresh = (defaults.object(forKey: "confirmQuotaRefresh") as? Bool) ?? true
         self.claudeGaugePath   = defaults.string(forKey: "claudeGaugePath") ?? ""
         self.codexGaugePath    = defaults.string(forKey: "codexGaugePath") ?? ""
 
         self.accountAliases    = Self.loadDict(forKey: "accountAliases", from: defaults)
         self.accountColors     = Self.loadDict(forKey: "accountColors",  from: defaults)
         self.accountOrder      = (defaults.array(forKey: "accountOrder") as? [String]) ?? []
+
+        if let data = defaults.data(forKey: "autoRefreshConfigs"),
+           let decoded = try? JSONDecoder().decode([String: AutoRefreshConfig].self, from: data) {
+            self.autoRefreshConfigs = decoded
+        } else {
+            self.autoRefreshConfigs = [:]
+        }
+    }
+
+    // MARK: - Auto-refresh schedule accessors
+
+    /// Config for a service key, or a disabled default when none is saved yet.
+    func autoRefreshConfig(for key: String) -> AutoRefreshConfig {
+        autoRefreshConfigs[key] ?? AutoRefreshConfig()
+    }
+
+    /// Mutate (creating if absent) the config for a service key. Reassigning the
+    /// dictionary triggers persistence and republishes to any observing views.
+    func updateAutoRefreshConfig(for key: String, _ mutate: (inout AutoRefreshConfig) -> Void) {
+        var c = autoRefreshConfigs[key] ?? AutoRefreshConfig()
+        mutate(&c)
+        autoRefreshConfigs[key] = c
+    }
+
+    private func persistAutoRefreshConfigs() {
+        if let data = try? JSONEncoder().encode(autoRefreshConfigs) {
+            defaults.set(data, forKey: "autoRefreshConfigs")
+        }
     }
 
     // MARK: - Tray item ordering

@@ -1,0 +1,101 @@
+# XcodeGen spec — generates AIGauge.xcodeproj with three native targets:
+#   • AIGauge      (menu-bar .app)   — the SwiftUI GUI
+#   • ClaudeGauge  (command-line)    — usage CLI, embedded + signed into the app
+#   • CodexGauge   (command-line)    — usage CLI, embedded + signed into the app
+#
+# The two CLIs are copied into the app's Contents/Resources with "Code Sign On
+# Copy", so a single Product → Archive signs everything and Distribute App →
+# Developer ID notarizes the whole bundle in one pass.
+#
+# Regenerate the project after editing this file:
+#   brew install xcodegen        # once
+#   xcodegen generate            # run from this folder
+#
+# Then open AIGauge.xcodeproj, pick your Team under Signing & Capabilities, and
+# Product → Archive. See XCODE.md for the full release walkthrough.
+
+name: AIGauge
+
+options:
+  bundleIdPrefix: com.aigauge
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+  minimumXcodeGenVersion: "2.35.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    ENABLE_HARDENED_RUNTIME: YES          # required for notarization
+    CODE_SIGN_STYLE: Automatic
+    # Leave DEVELOPMENT_TEAM blank to pick your team in Xcode's UI, or set your
+    # 10-character Team ID here to bake it in:
+    # DEVELOPMENT_TEAM: ABCDE12345
+
+targets:
+
+  ClaudeGauge:
+    type: tool
+    platform: macOS
+    sources:
+      - path: claude-gauge/Sources
+        # These GUI files belong to an older standalone app and must not compile
+        # into the CLI (mirrors the exclude list in claude-gauge/Package.swift).
+        excludes:
+          - "AppDelegate.swift"
+          - "MenuBarManager.swift"
+          - "SettingsView.swift"
+          - "LaunchAtLoginHelper.swift"
+    settings:
+      base:
+        PRODUCT_NAME: ClaudeGauge
+        PRODUCT_BUNDLE_IDENTIFIER: com.aigauge.ClaudeGauge
+        ENABLE_HARDENED_RUNTIME: YES
+        # Embedded inside AIGauge.app via the copy phase — don't also install it
+        # into the archive, or Xcode treats the archive as generic (no Direct
+        # Distribution / notarization option).
+        SKIP_INSTALL: YES
+
+  CodexGauge:
+    type: tool
+    platform: macOS
+    sources:
+      - codex-gauge/Sources
+    settings:
+      base:
+        PRODUCT_NAME: CodexGauge
+        PRODUCT_BUNDLE_IDENTIFIER: com.aigauge.CodexGauge
+        ENABLE_HARDENED_RUNTIME: YES
+        # Embedded inside AIGauge.app via the copy phase — don't also install it
+        # into the archive, or Xcode treats the archive as generic (no Direct
+        # Distribution / notarization option).
+        SKIP_INSTALL: YES
+
+  AIGauge:
+    type: application
+    platform: macOS
+    sources:
+      - aigauge/Sources
+      - aigauge/Resources          # Assets.xcassets (app icon)
+    settings:
+      base:
+        INFOPLIST_FILE: aigauge/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_NAME: AIGauge
+        PRODUCT_BUNDLE_IDENTIFIER: com.aigauge.app
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: YES
+        # LSUIElement (menu-bar / no-Dock) already comes from aigauge/Info.plist.
+    dependencies:
+      - target: ClaudeGauge
+        embed: true
+        codeSign: true
+        copy:
+          destination: resources
+      - target: CodexGauge
+        embed: true
+        codeSign: true
+        copy:
+          destination: resources
