@@ -26,7 +26,7 @@ Bonus trick: Claude has a `refresh` action that fires a tiny "ping" to *start* i
 ### GUI
 
 <p align="center">
-  <img src="resources/gui1.png" width="360" alt="AIGauge tray menu">
+  <img src="resources/gui2.png" width="360" alt="AIGauge tray menu showing Claude usage and Codex reset credits">
 </p>
 
 Click the tray gauge → menu shows both services' current usage windows. For Codex accounts using banked full resets, it also shows how many are available and when they expire.
