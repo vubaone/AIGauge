@@ -52,3 +52,5 @@ settings.json
 .fuse_hidden*
 /GUIDE_MAKE_CLEANUP.MD
 /cleanup.sh
+/MAKE_VERSION_GUIDE.MD
+/make_version.sh

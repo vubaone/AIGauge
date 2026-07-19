@@ -2,8 +2,9 @@ import Foundation
 import Combine
 import AppKit
 
-/// Fires the token-spending "Refresh window" for each service at one or more
-/// user-chosen times of day (a comma-separated "HH:mm" list per service).
+/// Fires token-spending "Refresh window" actions at user-chosen times of day.
+/// Claude accounts always support this. Codex schedules run only while its live
+/// usage response advertises the legacy 5-hour-window capability.
 ///
 /// Behaviour (per the product spec):
 ///   • At each scheduled time each day, send one refresh for that service.
@@ -26,13 +27,18 @@ final class AutoRefreshScheduler {
 
     private var timer: Timer?
     private var cancellables = Set<AnyCancellable>()
+    /// Service keys with a refresh currently in flight — prevents a tick or wake
+    /// from launching a second send while the first is still running.
+    private var inFlight: Set<String> = []
 
     private init() {}
 
     /// Begin evaluating schedules: on a periodic tick, on system wake, and
-    /// whenever the Claude account list changes (so a catch-up can fire right
-    /// after accounts finish loading at launch).
+    /// whenever backend data changes (so a catch-up can fire right after data
+    /// finishes loading at launch).
     func start() {
+        guard timer == nil else { return }
+
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(handleWake),
             name: NSWorkspace.didWakeNotification, object: nil)
@@ -45,11 +51,23 @@ final class AutoRefreshScheduler {
             .sink { [weak self] _ in Task { @MainActor in self?.evaluate() } }
             .store(in: &cancellables)
 
+        UsageStore.shared.$codex
+            .sink { [weak self] _ in Task { @MainActor in self?.evaluate() } }
+            .store(in: &cancellables)
+
         evaluate()
     }
 
     @objc private func handleWake() {
-        Task { @MainActor in evaluate() }
+        // Check immediately, then again a few seconds later: the network is
+        // often still reconnecting in the first moments after a wake, so the
+        // first attempt can fail. Re-checks are idempotent (guarded by
+        // `inFlight` and `lastFired`), so the extra call is harmless.
+        Task { @MainActor in
+            evaluate()
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            evaluate()
+        }
     }
 
     /// Seed a freshly enabled (or re-timed) schedule so it does NOT retro-fire
@@ -75,9 +93,16 @@ final class AutoRefreshScheduler {
             guard cfg.enabled,
                   let occ = Self.mostRecentOccurrence(of: cfg.time, atOrBefore: now) else { continue }
 
+            // Only a live 18,000-second window enables token-spending Codex
+            // refreshes. Weekly-only responses and initial/failed loads skip it.
+            if key == AppSettings.codexOrderKey,
+               !store.codex.supportsWindowRefresh { continue }
+
             let occTS = occ.timeIntervalSince1970
             // Already acted on this occurrence (1s tolerance for float rounding).
             guard cfg.lastFired + 1 < occTS else { continue }
+            // A send for this service is already running — don't double-fire.
+            guard !inFlight.contains(key) else { continue }
 
             // For Claude accounts, wait until the account list has loaded and
             // only fire for accounts that still exist (avoid spending tokens on
@@ -87,19 +112,28 @@ final class AutoRefreshScheduler {
                 if !store.claudeAccounts.contains(where: { $0.id == key }) { continue }
             }
 
-            // Record before firing so a slow refresh can't double-fire on the
-            // next tick.
-            s.updateAutoRefreshConfig(for: key) { $0.lastFired = occTS }
-            fire(key: key)
+            // Fire, but only mark this occurrence handled once the refresh
+            // actually SUCCEEDS. If it fails — e.g. the network is still coming
+            // up in the seconds right after a wake — lastFired is left untouched
+            // so the next tick (≤30s) or the next wake retries instead of
+            // silently skipping the day.
+            inFlight.insert(key)
+            Task {
+                let ok = await self.fire(key: key)
+                if ok {
+                    s.updateAutoRefreshConfig(for: key) { $0.lastFired = occTS }
+                }
+                self.inFlight.remove(key)
+            }
         }
     }
 
-    private func fire(key: String) {
+    private func fire(key: String) async -> Bool {
         let store = UsageStore.shared
         if key == AppSettings.codexOrderKey {
-            Task { await store.triggerCodexRefresh() }
+            return await store.triggerCodexRefresh()
         } else {
-            Task { await store.triggerClaudeRefresh(accountId: key) }
+            return await store.triggerClaudeRefresh(accountId: key)
         }
     }
 

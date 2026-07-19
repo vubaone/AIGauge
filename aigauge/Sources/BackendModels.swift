@@ -48,6 +48,7 @@ struct CodexUsageJSON: Codable {
     let planType: String?
     let email: String?
     let rateLimit: RateLimit?
+    let rateLimitResetCredits: ResetCredits?
 
     struct RateLimit: Codable {
         let allowed: Bool?
@@ -64,6 +65,21 @@ struct CodexUsageJSON: Codable {
         let resetLabel: String?
         let window: String?
     }
+
+    struct ResetCredits: Codable {
+        let availableCount: Int?
+        let applicableAvailableCount: Int?
+        let credits: [ResetCredit]?
+    }
+
+    struct ResetCredit: Codable {
+        let id: String?
+        let resetType: String?
+        let status: String?
+        let grantedAt: String?
+        let expiresAt: String?
+        let title: String?
+    }
 }
 
 // MARK: - Normalised snapshot used by the UI / tray
@@ -75,12 +91,50 @@ struct UsageWindow: Identifiable {
     let resetText: String    // "4 hr 12 min" / "n/a"
 }
 
+/// One available, banked Codex rate-limit reset.
+struct UsageResetCredit: Identifiable {
+    let id: String
+    let title: String
+    let status: String?
+    let grantedAt: String?
+    let expiresAt: String?
+
+    var expirationDate: Date? {
+        guard let expiresAt else { return nil }
+        return parseCodexTimestamp(expiresAt)
+    }
+
+    var expirationText: String {
+        guard let date = expirationDate else { return expiresAt ?? "unknown" }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
+    }
+}
+
 struct UsageSnapshot {
     let serviceName: String                 // "Claude" / "Codex"
     let windows: [UsageWindow]
     let primaryPercent: Double?             // for tray display
     let lastUpdated: Date
     let error: String?
+    let availableResetCount: Int?
+    let resetCredits: [UsageResetCredit]
+    let supportsWindowRefresh: Bool
+
+    init(serviceName: String, windows: [UsageWindow], primaryPercent: Double?,
+         lastUpdated: Date, error: String?, availableResetCount: Int? = nil,
+         resetCredits: [UsageResetCredit] = [], supportsWindowRefresh: Bool = false) {
+        self.serviceName = serviceName
+        self.windows = windows
+        self.primaryPercent = primaryPercent
+        self.lastUpdated = lastUpdated
+        self.error = error
+        self.availableResetCount = availableResetCount
+        self.resetCredits = resetCredits
+        self.supportsWindowRefresh = supportsWindowRefresh
+    }
 
     static func empty(_ service: String) -> UsageSnapshot {
         UsageSnapshot(serviceName: service, windows: [], primaryPercent: nil,
@@ -224,10 +278,50 @@ extension UsageSnapshot {
                                  percent: p.usedPercent ?? 0,
                                  resetText: p.resetLabel ?? "n/a"))
         }
+
+        let resets = (j.rateLimitResetCredits?.credits ?? [])
+            .filter { $0.status == nil || $0.status == "available" }
+            .map { credit in
+                let fallbackId = [credit.resetType, credit.grantedAt, credit.expiresAt, credit.title]
+                    .compactMap { $0 }
+                    .joined(separator: "|")
+                return UsageResetCredit(
+                    id: credit.id ?? (fallbackId.isEmpty ? UUID().uuidString : fallbackId),
+                    title: credit.title ?? "Full reset",
+                    status: credit.status,
+                    grantedAt: credit.grantedAt,
+                    expiresAt: credit.expiresAt)
+            }
+            .sorted {
+                ($0.expirationDate ?? .distantFuture) < ($1.expirationDate ?? .distantFuture)
+            }
+        let resetCount = j.rateLimitResetCredits?.availableCount
+            ?? (resets.isEmpty ? nil : resets.count)
+        let supportsWindowRefresh = [j.rateLimit?.primaryWindow,
+                                     j.rateLimit?.secondaryWindow]
+            .compactMap { $0 }
+            .contains { $0.limitWindowSeconds == 18_000 }
+
         return UsageSnapshot(serviceName: "Codex", windows: w,
                              primaryPercent: j.rateLimit?.primaryWindow?.usedPercent,
-                             lastUpdated: Date(), error: nil)
+                             lastUpdated: Date(), error: nil,
+                             availableResetCount: resetCount,
+                             resetCredits: resets,
+                             supportsWindowRefresh: supportsWindowRefresh)
     }
+}
+
+/// OpenAI currently returns fractional-second ISO-8601 timestamps for reset
+/// grants. Keep a non-fractional fallback so a response-format simplification
+/// does not hide otherwise valid expiration data.
+func parseCodexTimestamp(_ raw: String) -> Date? {
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = fractional.date(from: raw) { return date }
+
+    let standard = ISO8601DateFormatter()
+    standard.formatOptions = [.withInternetDateTime]
+    return standard.date(from: raw)
 }
 
 /// "18000" → "5 hours", "604800" → "1 week", etc. Pluralises correctly.

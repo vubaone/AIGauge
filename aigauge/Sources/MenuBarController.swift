@@ -5,6 +5,10 @@ import SwiftUI
 /// Owns the NSStatusItem in the menu bar and the settings NSWindow.
 @MainActor
 final class MenuBarController: NSObject {
+    /// Keeps a verbose backend error from widening the entire dropdown beyond
+    /// the comfortable size of the normal usage rows.
+    static let maximumMenuErrorWidth: CGFloat = 280
+
     private var statusItem: NSStatusItem!
     private var settingsWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
@@ -191,8 +195,9 @@ final class MenuBarController: NSObject {
             addProviderSection(to: menu,
                                title: "Codex",
                                snapshot: UsageStore.shared.codex,
-                               refreshSelector: #selector(triggerCodex),
-                               refreshTitle: "Refresh window (~24 tokens)",
+                               refreshSelector: UsageStore.shared.codex.supportsWindowRefresh
+                                   ? #selector(triggerCodex) : nil,
+                               refreshTitle: "Refresh 5-hour window (~24 tokens)",
                                isLoading: UsageStore.shared.isLoadingCodex)
         }
         if m != .none {
@@ -234,9 +239,7 @@ final class MenuBarController: NSObject {
                              .foregroundColor: NSColor.secondaryLabelColor])
             header.isEnabled = false
             menu.addItem(header)
-            let item = NSMenuItem(title: "  ⚠ \(err)", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
+            addErrorItem(err, to: menu)
             return
         }
 
@@ -252,9 +255,7 @@ final class MenuBarController: NSObject {
             menu.addItem(header)
 
             if let err = account.error {
-                let item = NSMenuItem(title: "  ⚠ \(err)", action: nil, keyEquivalent: "")
-                item.isEnabled = false
-                menu.addItem(item)
+                addErrorItem(err, to: menu)
             } else if account.windows.isEmpty {
                 let item = NSMenuItem(title: "  (no data yet)", action: nil, keyEquivalent: "")
                 item.isEnabled = false
@@ -282,7 +283,7 @@ final class MenuBarController: NSObject {
         to menu: NSMenu,
         title: String,
         snapshot: UsageSnapshot,
-        refreshSelector: Selector,
+        refreshSelector: Selector?,
         refreshTitle: String,
         isLoading: Bool
     ) {
@@ -299,9 +300,7 @@ final class MenuBarController: NSObject {
         menu.addItem(header)
 
         if let err = snapshot.error {
-            let item = NSMenuItem(title: "  ⚠ \(err)", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
+            addErrorItem(err, to: menu)
         } else if snapshot.windows.isEmpty {
             let item = NSMenuItem(title: "  (no data yet)", action: nil, keyEquivalent: "")
             item.isEnabled = false
@@ -316,11 +315,72 @@ final class MenuBarController: NSObject {
             }
         }
 
-        let refresh = NSMenuItem(title: "  ↻ " + refreshTitle,
-                                 action: refreshSelector,
-                                 keyEquivalent: "")
-        refresh.target = self
-        menu.addItem(refresh)
+        if let count = snapshot.availableResetCount {
+            let noun = count == 1 ? "reset" : "resets"
+            let summary = NSMenuItem(title: "  \(count) \(noun) available",
+                                     action: nil, keyEquivalent: "")
+            summary.isEnabled = false
+            menu.addItem(summary)
+
+            for reset in snapshot.resetCredits.prefix(3) {
+                let line = "    \(reset.title) · expires \(reset.expirationText)"
+                let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+            }
+        }
+
+        if let refreshSelector {
+            let refresh = NSMenuItem(title: "  ↻ " + refreshTitle,
+                                     action: refreshSelector,
+                                     keyEquivalent: "")
+            refresh.target = self
+            menu.addItem(refresh)
+        }
+    }
+
+    /// Collapse multiline process errors and truncate by rendered width rather
+    /// than character count, so wide glyphs cannot unexpectedly grow the menu.
+    /// The caller keeps the complete normalized message in the tooltip.
+    static func menuErrorTitle(_ error: String, maximumWidth: CGFloat) -> String {
+        let prefix = "  ⚠ "
+        let normalized = error.split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+        let font = NSFont.menuFont(ofSize: 0)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+
+        func renderedWidth(_ value: String) -> CGFloat {
+            (value as NSString).size(withAttributes: attributes).width
+        }
+
+        let full = prefix + normalized
+        guard renderedWidth(full) > maximumWidth else { return full }
+
+        let characters = Array(normalized)
+        var lower = 0
+        var upper = characters.count
+        while lower < upper {
+            let middle = (lower + upper + 1) / 2
+            let candidate = prefix + String(characters.prefix(middle)) + "…"
+            if renderedWidth(candidate) <= maximumWidth {
+                lower = middle
+            } else {
+                upper = middle - 1
+            }
+        }
+        return prefix + String(characters.prefix(lower)).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    private func addErrorItem(_ error: String, to menu: NSMenu) {
+        let normalized = error.split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+        let title = Self.menuErrorTitle(
+            normalized, maximumWidth: Self.maximumMenuErrorWidth)
+        let item = NSMenuItem(title: title,
+                              action: nil, keyEquivalent: "")
+        item.toolTip = normalized
+        item.isEnabled = false
+        menu.addItem(item)
     }
 
     // MARK: - Actions
@@ -353,7 +413,7 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func triggerCodex() {
-        confirm("Send a tiny prompt to Codex? Costs ~24 tokens and starts/extends the 5-hour quota window.") {
+        confirm("Send a tiny prompt to Codex? Costs ~24 tokens and starts or extends the detected 5-hour quota window.") {
             Task { await UsageStore.shared.triggerCodexRefresh() }
         }
     }

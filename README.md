@@ -17,9 +17,9 @@
 
 ## Why
 
-I pay for both Claude Pro and ChatGPT Plus. I also have ADHD about quota windows. Manually opening claude.ai → Settings → Usage and then chatgpt.com/codex to see if I'd hit the 5-hour wall got old, so I built one menu-bar dot that tells me both at a glance.
+I pay for both Claude Pro and ChatGPT Plus. I also have ADHD about quota windows. Manually opening claude.ai → Settings → Usage and then chatgpt.com/codex to inspect the current limits got old, so I built one menu-bar dot that tells me both at a glance.
 
-Bonus trick: each tool also has a `refresh` action that fires a 2–24 token "ping" to *start* the 5-hour window early, so you don't lose 2 hours of quota every time you sit down to actually work.
+Bonus trick: Claude has a `refresh` action that fires a tiny "ping" to *start* its 5-hour window early. Codex exposes the same action only when its live usage response reports the legacy 5-hour mechanism; with the newer weekly limit and banked full resets, AIGauge shows the reset count and expiration dates instead.
 
 ## Usage
 
@@ -29,7 +29,7 @@ Bonus trick: each tool also has a `refresh` action that fires a 2–24 token "pi
   <img src="resources/gui1.png" width="360" alt="AIGauge tray menu">
 </p>
 
-Click the tray gauge → menu shows both services with their 5-hour and 1-week numbers and a one-click `Refresh window` button.
+Click the tray gauge → menu shows both services' current usage windows. For Codex accounts using banked full resets, it also shows how many are available and when they expire.
 
 In **Settings → General** you choose:
 
@@ -46,8 +46,8 @@ ClaudeGauge usage           # 5-hour: 8.0%  (resets in 4 hr 12 min) ...
 ClaudeGauge usage --json    # pipe me into jq
 ClaudeGauge refresh         # ~2 tokens — primes the 5h window
 
-CodexGauge  usage           # Plan: plus · primary 1.0% · secondary 70.0%
-CodexGauge  refresh         # ~24 tokens
+CodexGauge  usage           # Plan, current window, and banked reset expirations
+CodexGauge  refresh         # Legacy 5h only; refuses otherwise without spending
 ```
 
 Exit codes: `0` ok · `2` bad args · `3` missing credentials · `4` API error.

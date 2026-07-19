@@ -73,6 +73,9 @@ struct CodexUsageResponse: Codable, Sendable {
     let planType: String?
     let rateLimit: RateLimit?
     let credits: Credits?
+    /// Summary embedded in `/wham/usage`. The individual grant records (and
+    /// their expiration timestamps) come from a separate details endpoint.
+    let rateLimitResetCredits: RateLimitResetCreditsSummary?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
@@ -81,6 +84,61 @@ struct CodexUsageResponse: Codable, Sendable {
         case planType = "plan_type"
         case rateLimit = "rate_limit"
         case credits
+        case rateLimitResetCredits = "rate_limit_reset_credits"
+    }
+
+    /// The tiny-prompt refresh is meaningful only for the legacy rolling
+    /// 5-hour quota mechanism. Detect it from the live response instead of
+    /// assuming OpenAI's current quota model.
+    var supportsLegacyWindowRefresh: Bool {
+        [rateLimit?.primaryWindow, rateLimit?.secondaryWindow]
+            .compactMap { $0 }
+            .contains { $0.limitWindowSeconds == 18_000 }
+    }
+}
+
+// MARK: - Banked rate-limit resets
+
+/// Count-only summary returned inline by `/backend-api/wham/usage`.
+struct RateLimitResetCreditsSummary: Codable, Sendable {
+    let availableCount: Int?
+    let applicableAvailableCount: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case availableCount = "available_count"
+        case applicableAvailableCount = "applicable_available_count"
+    }
+}
+
+/// Detailed response from the internal, read-only
+/// `/backend-api/wham/rate-limit-reset-credits` endpoint.
+struct RateLimitResetCreditsResponse: Codable, Sendable {
+    let availableCount: Int?
+    let credits: [RateLimitResetCredit]?
+
+    enum CodingKeys: String, CodingKey {
+        case availableCount = "available_count"
+        case credits
+    }
+}
+
+/// One banked Codex reset. All fields remain optional because this is an
+/// undocumented product endpoint and its response may evolve independently.
+struct RateLimitResetCredit: Codable, Sendable {
+    let id: String?
+    let resetType: String?
+    let status: String?
+    let grantedAt: String?
+    let expiresAt: String?
+    let title: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case resetType = "reset_type"
+        case status
+        case grantedAt = "granted_at"
+        case expiresAt = "expires_at"
+        case title
     }
 }
 

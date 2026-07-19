@@ -22,11 +22,10 @@ enum BackendSelection: String, CaseIterable, Identifiable {
 /// Back-compat alias — older code referred to this as TrayBackend.
 typealias TrayBackend = BackendSelection
 
-/// Per-service scheduled "auto-refresh at HH:mm" configuration.
-/// Stored keyed by service key: a Claude account id, or `AppSettings.codexOrderKey`
-/// for Codex. `lastFired` is the timeIntervalSince1970 of the last scheduled
-/// occurrence we already acted on — used to fire exactly once per occurrence
-/// and to coalesce occurrences missed while the Mac was asleep.
+/// Per-service scheduled "auto-refresh at HH:mm" configuration, keyed by a
+/// Claude account id or the Codex order key. Codex schedules are enabled only
+/// when its current usage response exposes a 5-hour window. `lastFired` tracks
+/// the last handled occurrence so wake catch-ups coalesce and fire exactly once.
 struct AutoRefreshConfig: Codable, Equatable {
     var enabled: Bool = false
     var time: String = ""          // one or more "HH:mm" (24h), comma-separated; empty = unset
@@ -101,8 +100,8 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(accountOrder, forKey: "accountOrder") }
     }
 
-    /// Per-service scheduled auto-refresh configs, keyed by service key
-    /// (Claude account id, or `codexOrderKey` for Codex). Persisted as JSON.
+    /// Scheduled refresh configs keyed by Claude account id or the Codex order
+    /// key. Persisted as JSON.
     @Published var autoRefreshConfigs: [String: AutoRefreshConfig] {
         didSet { persistAutoRefreshConfigs() }
     }

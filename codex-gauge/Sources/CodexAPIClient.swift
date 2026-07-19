@@ -18,6 +18,7 @@ class CodexAPIClient {
 
     // Default endpoint paths (override with --endpoint).
     static let defaultUsagePath = "/backend-api/wham/usage"
+    static let defaultResetCreditsPath = "/backend-api/wham/rate-limit-reset-credits"
     static let defaultRefreshPath = "/backend-api/codex/responses"
 
     /// Response headers we surface in --raw output.
@@ -93,8 +94,41 @@ class CodexAPIClient {
 
         let decoded = (try? JSONDecoder().decode(CodexUsageResponse.self, from: data))
             ?? CodexUsageResponse(userId: nil, accountId: nil, email: nil,
-                                   planType: nil, rateLimit: nil, credits: nil)
+                                   planType: nil, rateLimit: nil, credits: nil,
+                                   rateLimitResetCredits: nil)
         return UsageResult(parsed: decoded, raw: raw, status: http.statusCode, headers: headers)
+    }
+
+    /// Fetch individual banked reset grants, including their expiration times.
+    /// This is optional enrichment: any HTTP, transport, or decoding failure is
+    /// logged and returned as nil so the main usage refresh still succeeds.
+    func fetchRateLimitResetCredits() async -> RateLimitResetCreditsResponse? {
+        guard settings.authMode != "apikey",
+              let url = URL(string: "\(chatgptBase)\(Self.defaultResetCreditsPath)") else {
+            return nil
+        }
+
+        do {
+            await logger.log("GET \(url.absoluteString)", level: .debug)
+            let request = try authorizedRequest(url: url, method: "GET")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                await logger.log("Reset credits response was not HTTP", level: .warning)
+                return nil
+            }
+            guard http.statusCode == 200 else {
+                await logger.log("Reset credits HTTP \(http.statusCode); using usage summary", level: .warning)
+                return nil
+            }
+            guard let decoded = try? JSONDecoder().decode(RateLimitResetCreditsResponse.self, from: data) else {
+                await logger.log("Could not decode reset-credit details; using usage summary", level: .warning)
+                return nil
+            }
+            return decoded
+        } catch {
+            await logger.log("Reset credits fetch failed: \(error.localizedDescription); using usage summary", level: .warning)
+            return nil
+        }
     }
 
     private func interestingHeaderValues(from http: HTTPURLResponse) -> [String: String] {

@@ -1,11 +1,11 @@
 # AIGauge
 
-Two small Swift CLIs that report rolling-window usage and trigger quota refresh for **Claude** and **Codex (ChatGPT Plus)** subscriptions. Designed to be driven by `openclaw` (or any cron / launchd / shell scheduler) — pure stdout for results, stderr for logs, exit codes for branching.
+Two small Swift CLIs that report current usage limits for **Claude** and **Codex (ChatGPT Plus)** subscriptions. They are designed for `openclaw` (or any cron / launchd / shell scheduler): stdout for results, stderr for logs, and exit codes for branching.
 
 | Subproject | Reads | Triggers | Source of truth |
 |---|---|---|---|
 | [`claude-gauge/`](claude-gauge/) — `ClaudeGauge` | claude.ai 5h / 7d / Opus windows | sends a 2-token prompt in a temporary conversation | sessionKey cookie from Claude Desktop / Brave / Chrome |
-| [`codex-gauge/`](codex-gauge/) — `CodexGauge` | `/wham/usage` primary (5h) + secondary (7d) windows + credits | sends a `gpt-5.2` SSE completion to `/codex/responses` | `~/.codex/auth.json` (OAuth JWT, no cookies) |
+| [`codex-gauge/`](codex-gauge/) — `CodexGauge` | `/wham/usage` windows plus banked reset counts and expirations | legacy 5h only: sends a tiny completion after live capability detection | `~/.codex/auth.json` (OAuth JWT, no cookies) |
 | [`aigauge/`](aigauge/) — `AIGauge` | menu-bar GUI wrapper around the two CLIs | — | shells out to ClaudeGauge / CodexGauge |
 
 Both CLIs expose the same two commands: `usage` and `refresh`.
@@ -23,7 +23,7 @@ cd claude-gauge && swift build -c release
 
 # Codex
 cd codex-gauge  && swift build -c release
-# binary at: codex/.build/release/CodexGauge
+# binary at: codex-gauge/.build/release/CodexGauge
 ```
 
 Or use the included `run.sh` in each folder for a build + smoke test.
@@ -35,7 +35,7 @@ Or use the included `run.sh` in each folder for a build + smoke test.
 | Command | Behaviour |
 |---|---|
 | `usage` | Fetch current rolling-window usage. Prints human-readable by default, or JSON with `--json`. |
-| `refresh` | Send a minimal private prompt to start/extend the 5-hour quota window. Costs ~2 tokens (Claude) or ~24 tokens (Codex). |
+| `refresh` | Send a minimal private prompt to start/extend a 5-hour window. Claude costs ~2 tokens. Codex first verifies that a live 5-hour window exists, then costs ~24 tokens; otherwise it refuses without sending. |
 | `help` / `-h` | Print usage. |
 
 ### Common flags
@@ -122,29 +122,34 @@ Flags:
 $ CodexGauge usage
 [~/.codex/auth.json] HTTP 200
 Plan      : plus  (you@example.com)
-Primary  (5h):   1.0%  (resets in 5 hr 0 min)
-Secondary(7d):  70.0%  (resets in 61 hr 35 min)
+Primary  (7d):  11.0%  (resets in 165 hr 13 min)
+Resets    : 3 available
+  Full reset: expires Jul 27, 2026
+  Full reset: expires Jul 31, 2026
+  Full reset: expires Aug 12, 2026
 
 $ CodexGauge usage --json
 {"accountId":"...","credits":{"balance":"0","hasCredits":false,"unlimited":false},
  "email":"you@example.com","httpStatus":200,"planType":"plus",
  "rateLimit":{"allowed":true,"limitReached":false,
-   "primaryWindow":{"limitWindowSeconds":18000,"resetAfterSeconds":18000,
-     "resetAt":1778920915,"resetLabel":"5 hr 0 min","usedPercent":1,"window":"5h"},
-   "secondaryWindow":{"limitWindowSeconds":604800,"resetAfterSeconds":223748,
-     "resetAt":1779126663,"resetLabel":"62 hr 9 min","usedPercent":70,"window":"7d"}},
+   "primaryWindow":{"limitWindowSeconds":604800,"resetAfterSeconds":594781,
+     "resetAt":1785040899,"resetLabel":"165 hr 13 min","usedPercent":11,"window":"7d"}},
+ "rateLimitResetCredits":{"availableCount":3,"applicableAvailableCount":0,
+   "credits":[{"status":"available","title":"Full reset",
+     "expiresAt":"2026-07-27T00:05:16.750190Z"}]},
  "source":"~/.codex/auth.json","userId":"user-..."}
 
 $ CodexGauge refresh --json
-{"httpStatus":200,"responseBytes":2731,"status":"ok"}
+error: Codex does not currently expose a 5-hour usage window; no message was sent
 ```
 
 **Endpoints in use:**
 
 - Usage: `GET https://chatgpt.com/backend-api/wham/usage`
-- Refresh: `POST https://chatgpt.com/backend-api/codex/responses` (streaming SSE, single `gpt-5.2` completion ≈ 24 tokens)
+- Reset expirations (optional enrichment): `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`
+- Legacy refresh: `POST https://chatgpt.com/backend-api/codex/responses` (only after an 18,000-second window is detected)
 
-**If `refresh` starts returning `400 ... model is not supported`:** OpenAI rotated the default Codex model. Discover the new allowed slug and update the hardcoded value in [`codex/Sources/CodexAPIClient.swift`](codex/Sources/CodexAPIClient.swift):
+These ChatGPT backend endpoints are undocumented and can change. Reset-detail failures are optional so the main usage result still succeeds. If the legacy `refresh` action returns `400 ... model is not supported`, OpenAI may have rotated the default Codex model; update the hardcoded value in [`codex-gauge/Sources/CodexAPIClient.swift`](codex-gauge/Sources/CodexAPIClient.swift).
 
 ```bash
 CodexGauge usage --endpoint "/backend-api/codex/models?client_version=0.30.0" --raw --json \
@@ -166,17 +171,16 @@ CodexGauge  usage --json   # parse .rateLimit.primaryWindow.usedPercent
 
 If exit code is `0`, parse JSON. If `3`, credentials need re-bootstrapping (re-login in app/browser, then run `codex login` for the Codex side). If `4`, API is temporarily unavailable — retry later.
 
-### Pattern 2 — keep the 5-hour window warm
+### Pattern 2 — keep Claude's 5-hour window warm
 
 Schedule `refresh` to run a few minutes before you expect to start a session:
 
 ```bash
-# Cron-style: every weekday at 08:55, prime both windows for a 09:00 work session
+# Cron-style: every weekday at 08:55, prime Claude for a 09:00 work session
 55 8 * * 1-5  /path/to/ClaudeGauge refresh --json >> ~/claude-refresh.log 2>&1
-55 8 * * 1-5  /path/to/CodexGauge  refresh --json >> ~/codex-refresh.log  2>&1
 ```
 
-Cost per refresh: ~2 tokens (Claude), ~24 tokens (Codex). Both deduct from your weekly budget — don't loop more than once per ~5 hours or you waste quota.
+Claude costs ~2 tokens per refresh and deducts from the weekly budget. Codex should be scheduled only while its usage JSON reports an 18,000-second window. The Codex CLI checks again immediately before sending, so a server-side migration to weekly/banked resets fails safely without spending tokens.
 
 ### Pattern 3 — conditional refresh (only when window is idle)
 
@@ -239,9 +243,9 @@ The tray icon `gauge` appears with the configured backend's primary-window perce
 
 - **General tab** — pick which backend's percent shows on the tray (Claude / Codex / none), auto-refresh interval (seconds), "close hides to tray" toggle, "launch at login" toggle, optional manual paths to the CLI binaries.
 - **Claude tab** — progress bars for 5h / 7d / Opus 7d windows, `Check usage` button, `Refresh window (~2 tokens)` button.
-- **Codex tab** — progress bars for Primary (5h) and Secondary (7d) windows, `Check usage` button, `Refresh window (~24 tokens)` button.
+- **Codex tab** — current usage windows, banked reset counts and expirations, and `Check usage`. The token-spending refresh button and scheduler appear only when the live response reports a legacy 5-hour window.
 
-Tray menu also exposes `Refresh Usage Now`, the two `refresh` actions (with a confirmation dialog because they spend tokens), and `Quit`.
+Tray menu also exposes `Refresh Usage Now`, Claude refresh actions, an adaptive Codex refresh action when supported, and `Quit`. Token-spending menu actions use a confirmation dialog.
 
 ### Binary discovery
 

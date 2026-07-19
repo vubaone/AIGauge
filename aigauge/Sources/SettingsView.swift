@@ -70,6 +70,8 @@ struct GeneralTab: View {
 
             // Small, dim credit line pinned under the form.
             HStack(spacing: 5) {
+                Text("AIGauge \(AppVersion.displayString)")
+                Text("·")
                 Text("Made by VUBA")
                 Text("·")
                 Link("dev@vuba.one", destination: URL(string: "mailto:dev@vuba.one")!)
@@ -175,6 +177,10 @@ struct ServiceTab: View {
                 }
             }
 
+            if snapshot.availableResetCount != nil || !snapshot.resetCredits.isEmpty {
+                ResetCreditsCard(snapshot: snapshot)
+            }
+
             Spacer()
 
             HStack {
@@ -183,15 +189,21 @@ struct ServiceTab: View {
                 } label: { Label("Check usage", systemImage: "arrow.clockwise") }
                 .keyboardShortcut("r")
 
-                Button {
-                    Task { await store.triggerCodexRefresh() }
-                } label: { Label("Refresh window (~24 tokens)", systemImage: "bolt.fill") }
-                .help("Sends a tiny private prompt that starts the 5-hour quota window. Spends a small number of tokens.")
+                if snapshot.supportsWindowRefresh {
+                    Button {
+                        Task { await store.triggerCodexRefresh() }
+                    } label: {
+                        Label("Refresh 5-hour window (~24 tokens)", systemImage: "bolt.fill")
+                    }
+                    .help("Sends a tiny private prompt to start or extend the detected 5-hour quota window.")
+                }
 
                 Spacer()
             }
 
-            AutoRefreshRow(serviceKey: AppSettings.codexOrderKey)
+            if snapshot.supportsWindowRefresh {
+                AutoRefreshRow(serviceKey: AppSettings.codexOrderKey)
+            }
 
             if let msg = store.lastActionMessage {
                 Text(msg).font(.caption).foregroundColor(.secondary)
@@ -204,6 +216,63 @@ struct ServiceTab: View {
         guard snapshot.lastUpdated > .distantPast else { return "never" }
         let f = RelativeDateTimeFormatter()
         return "updated " + f.localizedString(for: snapshot.lastUpdated, relativeTo: Date())
+    }
+}
+
+/// Read-only view of banked Codex rate-limit resets. Redemption is
+/// intentionally left to the official Codex UI for now.
+struct ResetCreditsCard: View {
+    let snapshot: UsageSnapshot
+
+    private var availableCount: Int {
+        snapshot.availableResetCount ?? snapshot.resetCredits.count
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Usage limit resets")
+                    .font(.headline)
+                Spacer()
+                Text("\(availableCount) available")
+                    .font(.caption)
+                    .foregroundColor(.green)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color.green.opacity(0.14), in: Capsule())
+            }
+            .padding(12)
+
+            if snapshot.resetCredits.isEmpty {
+                Divider()
+                Text(availableCount > 0
+                     ? "Expiration details are temporarily unavailable."
+                     : "No banked resets available.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(12)
+            } else {
+                ForEach(snapshot.resetCredits) { reset in
+                    Divider()
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.counterclockwise.circle")
+                            .foregroundColor(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(reset.title)
+                                .font(.callout)
+                            Text("Expires \(reset.expirationText)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                }
+            }
+        }
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(Color.secondary.opacity(0.18), lineWidth: 1))
     }
 }
 
@@ -535,11 +604,11 @@ struct AddClaudeAccountSheet: View {
     }
 }
 
-/// Per-service scheduled auto-refresh control: a checkbox, the label
+/// Scheduled auto-refresh control for a Claude account, or for Codex when its
+/// usage response advertises the legacy 5-hour window. A checkbox, the label
 /// "Auto-refresh at", and a small HH:mm text field. When enabled, the
 /// AutoRefreshScheduler sends the token-spending "Refresh window" for this
-/// service once a day at the given time (catching up on wake if the Mac was
-/// asleep). `serviceKey` is a Claude account id or `AppSettings.codexOrderKey`.
+/// service at the given times (catching up on wake if the Mac was asleep).
 struct AutoRefreshRow: View {
     let serviceKey: String
 

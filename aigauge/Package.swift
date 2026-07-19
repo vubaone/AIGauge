@@ -15,6 +15,11 @@ let package = Package(
             name: "AIGauge",
             dependencies: [],
             path: "Sources"
+        ),
+        .testTarget(
+            name: "AIGaugeTests",
+            dependencies: ["AIGauge"],
+            path: "Tests/AIGaugeTests"
         )
     ]
 )

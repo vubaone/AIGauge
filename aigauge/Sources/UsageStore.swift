@@ -186,7 +186,19 @@ final class UsageStore: ObservableObject {
         defer { isLoadingCodex = false }
         do {
             let j = try await BackendRunner.runJSON(.codex, args: ["usage"], as: CodexUsageJSON.self)
-            self.codex = .fromCodex(j)
+            let snapshot = UsageSnapshot.fromCodex(j)
+            self.codex = snapshot
+
+            // A confirmed non-5-hour response retires an old Codex schedule
+            // instead of leaving it dormant and capable of surprising the user
+            // with a token spend if server behaviour changes again later.
+            if j.rateLimit != nil,
+               !snapshot.supportsWindowRefresh,
+               AppSettings.shared.autoRefreshConfig(for: AppSettings.codexOrderKey).enabled {
+                AppSettings.shared.updateAutoRefreshConfig(for: AppSettings.codexOrderKey) {
+                    $0.enabled = false
+                }
+            }
         } catch {
             self.codex = .failure("Codex", error.localizedDescription)
         }
@@ -196,7 +208,8 @@ final class UsageStore: ObservableObject {
 
     /// Trigger the 5-hour window for one specific account (by id) or, when nil,
     /// the sole account if there is exactly one.
-    func triggerClaudeRefresh(accountId: String? = nil) async {
+    @discardableResult
+    func triggerClaudeRefresh(accountId: String? = nil) async -> Bool {
         isLoadingClaude = true
         defer { isLoadingClaude = false }
         var args = ["refresh", "--json"]
@@ -210,8 +223,10 @@ final class UsageStore: ObservableObject {
             // then re-read so the on-screen usage windows show the new state.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             await refreshClaude()
+            return true
         } catch {
             lastActionMessage = "Claude refresh failed: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -254,7 +269,8 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    func triggerCodexRefresh() async {
+    @discardableResult
+    func triggerCodexRefresh() async -> Bool {
         isLoadingCodex = true
         defer { isLoadingCodex = false }
         do {
@@ -264,8 +280,10 @@ final class UsageStore: ObservableObject {
             // then re-read so the on-screen usage windows show the new state.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             await refreshCodex()
+            return true
         } catch {
             lastActionMessage = "Codex refresh failed: \(error.localizedDescription)"
+            return false
         }
     }
 

@@ -32,7 +32,7 @@ enum CLI {
 
     COMMANDS:
       usage      Fetch and print current ChatGPT/Codex rate-limit info
-      refresh    Send a tiny private message to start/roll the usage window
+      refresh    Legacy: prime a detected 5-hour window with a tiny message
       help       Show this message
 
     OPTIONS:
@@ -174,12 +174,22 @@ enum CLI {
         let client = CodexAPIClient(settings: settings)
         do {
             let r = try await client.fetchUsage(endpointOverride: opts.endpoint)
+            // Only enrich responses that advertise banked resets. This keeps
+            // the legacy 5-hour mechanism at one request if OpenAI restores it.
+            // A custom --endpoint also remains a single, predictable request.
+            let resetCredits: RateLimitResetCreditsResponse?
+            if opts.endpoint == nil, r.parsed.rateLimitResetCredits != nil {
+                resetCredits = await client.fetchRateLimitResetCredits()
+            } else {
+                resetCredits = nil
+            }
             if opts.json {
                 print(usageJSON(r.parsed, status: r.status, headers: r.headers,
+                                resetCredits: resetCredits,
                                 raw: opts.raw ? r.raw : nil, src: settings.source))
             } else {
                 print("[\(settings.source ?? "?")] HTTP \(r.status)")
-                print(usageHuman(r.parsed))
+                print(usageHuman(r.parsed, resetCredits: resetCredits))
                 if !r.headers.isEmpty {
                     print("\nRate-limit headers:")
                     for (k, v) in r.headers.sorted(by: { $0.key < $1.key }) {
@@ -202,6 +212,18 @@ enum CLI {
 
         let client = CodexAPIClient(settings: settings)
         do {
+            // The default action spends tokens, so confirm that the live usage
+            // response still exposes the legacy rolling 5-hour window. An
+            // explicit endpoint override is an advanced escape hatch and keeps
+            // its historical single-request behaviour.
+            if opts.endpoint == nil {
+                let usage = try await client.fetchUsage(endpointOverride: nil)
+                guard usage.parsed.supportsLegacyWindowRefresh else {
+                    fputs("error: Codex does not currently expose a 5-hour usage window; no message was sent\n", stderr)
+                    return 4
+                }
+            }
+
             let (raw, status) = try await client.triggerQuotaPeriod(endpointOverride: opts.endpoint)
             if opts.json {
                 var obj: [String: Any] = [
@@ -225,7 +247,8 @@ enum CLI {
 
     // MARK: - Output formatting
 
-    static func usageHuman(_ u: CodexUsageResponse) -> String {
+    static func usageHuman(_ u: CodexUsageResponse,
+                           resetCredits: RateLimitResetCreditsResponse? = nil) -> String {
         var lines: [String] = []
         let plan = u.planType ?? "?"
         let who = u.email ?? u.userId ?? "?"
@@ -250,6 +273,17 @@ enum CLI {
             lines.append("Credits   : \(bal)\(c.unlimited == true ? " (unlimited)" : "")")
         }
 
+        let resetCount = resetCredits?.availableCount
+            ?? u.rateLimitResetCredits?.availableCount
+        if let resetCount {
+            lines.append("Resets    : \(resetCount) available")
+        }
+        for credit in (resetCredits?.credits ?? []).filter({ $0.status == nil || $0.status == "available" }) {
+            let title = credit.title ?? "Full reset"
+            let expiry = credit.expiresAt.map(humanExpiration) ?? "unknown"
+            lines.append("  \(title): expires \(expiry)")
+        }
+
         if lines.count == 1 {
             lines.append("No rate-limit data in response. Use --raw to inspect.")
         }
@@ -261,7 +295,10 @@ enum CLI {
         return "\(label): \(pct)  (resets in \(w.resetLabel))"
     }
 
-    static func usageJSON(_ u: CodexUsageResponse, status: Int, headers: [String: String], raw: String?, src: String?) -> String {
+    static func usageJSON(_ u: CodexUsageResponse, status: Int,
+                          headers: [String: String],
+                          resetCredits: RateLimitResetCreditsResponse? = nil,
+                          raw: String?, src: String?) -> String {
         var dict: [String: Any] = ["httpStatus": status]
         if let v = u.userId { dict["userId"] = v }
         if let v = u.accountId { dict["accountId"] = v }
@@ -282,6 +319,19 @@ enum CLI {
             if let v = c.balance { cd["balance"] = v }
             dict["credits"] = cd
         }
+        if resetCredits != nil || u.rateLimitResetCredits != nil {
+            var rd: [String: Any] = [:]
+            if let v = resetCredits?.availableCount ?? u.rateLimitResetCredits?.availableCount {
+                rd["availableCount"] = v
+            }
+            if let v = u.rateLimitResetCredits?.applicableAvailableCount {
+                rd["applicableAvailableCount"] = v
+            }
+            if let credits = resetCredits?.credits {
+                rd["credits"] = credits.map(resetCreditDict)
+            }
+            dict["rateLimitResetCredits"] = rd
+        }
         if let src = src { dict["source"] = src }
         if !headers.isEmpty { dict["headers"] = headers }
         if let raw = raw { dict["raw"] = raw }
@@ -295,6 +345,31 @@ enum CLI {
         if let v = w.resetAfterSeconds { d["resetAfterSeconds"] = v }
         if let v = w.resetAt { d["resetAt"] = v }
         return d
+    }
+
+    private static func resetCreditDict(_ c: RateLimitResetCredit) -> [String: Any] {
+        var d: [String: Any] = [:]
+        if let v = c.id { d["id"] = v }
+        if let v = c.resetType { d["resetType"] = v }
+        if let v = c.status { d["status"] = v }
+        if let v = c.grantedAt { d["grantedAt"] = v }
+        if let v = c.expiresAt { d["expiresAt"] = v }
+        if let v = c.title { d["title"] = v }
+        return d
+    }
+
+    private static func humanExpiration(_ raw: String) -> String {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        guard let date = fractional.date(from: raw) ?? standard.date(from: raw) else {
+            return raw
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 
     private static func jsonString(_ obj: Any) -> String {
