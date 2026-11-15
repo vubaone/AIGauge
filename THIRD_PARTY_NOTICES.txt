@@ -1,0 +1,12 @@
+AIGauge — third-party notices
+
+ClaudeGauge derives from claude-gauge / ClaudeMeter (MIT).
+Its complete license is included as ClaudeGauge-LICENSE in this bundle and
+claude-gauge/LICENSE in the source repository.
+
+Release workflow adapted from SmallGit (MIT), Copyright (c) 2026 VUBA.
+The complete MIT license is included as LICENSE in this bundle.
+
+Mistral protocol/schema investigation referenced the official Mistral Vibe
+implementation and CodexBar documentation. The Mistral integration is an
+independent implementation; those projects' runtime code is not bundled.
