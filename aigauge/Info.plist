@@ -11,9 +11,9 @@
     <key>CFBundleDisplayName</key>
     <string>AIGauge</string>
     <key>CFBundleVersion</key>
-    <string>261101</string>
+    <string>261102</string>
     <key>CFBundleShortVersionString</key>
-    <string>26.11.01</string>
+    <string>26.11.02</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleInfoDictionaryVersion</key>

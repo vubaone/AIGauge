@@ -96,8 +96,8 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         PRODUCT_NAME: AIGauge
         PRODUCT_BUNDLE_IDENTIFIER: com.aigauge.app
-        MARKETING_VERSION: "26.11.01"
-        CURRENT_PROJECT_VERSION: "261101"
+        MARKETING_VERSION: "26.11.02"
+        CURRENT_PROJECT_VERSION: "261102"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
         # LSUIElement (menu-bar / no-Dock) already comes from aigauge/Info.plist.

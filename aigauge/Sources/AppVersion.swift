@@ -5,8 +5,8 @@ import Foundation
 /// After changing either constant, run the repository-local `make_version.sh`
 /// helper to synchronize Xcode and XcodeGen build settings.
 enum AppVersion {
-    static let clientVersionInt = 261101
-    static let clientVersionString = "26.11.01"
+    static let clientVersionInt = 261102
+    static let clientVersionString = "26.11.02"
 
     /// Runtime UI reads the built bundle first so it reflects the metadata that
     /// will actually ship. Swift constants are a fallback for `swift run`.
