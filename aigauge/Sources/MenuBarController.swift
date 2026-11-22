@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Owns the NSStatusItem in the menu bar and the settings NSWindow.
 @MainActor
-final class MenuBarController: NSObject {
+final class MenuBarController: NSObject, NSMenuDelegate {
     /// Keeps a verbose backend error from widening the entire dropdown beyond
     /// the comfortable size of the normal usage rows.
     nonisolated static let maximumMenuErrorWidth: CGFloat = 280
@@ -18,6 +18,10 @@ final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem!
     private var settingsWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
+    private let openAIBilling = OpenAIBilling()
+    private weak var billingMenuItem: NSMenuItem?
+    private weak var trackingMenu: NSMenu?
+    private var shouldRebuildMenu = false
 
     func install() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -32,6 +36,7 @@ final class MenuBarController: NSObject {
             btn.title = ""
         }
 
+        openAIBilling.onMenuTitleChange = { [weak self] title in self?.billingMenuItem?.title = "  " + title }
         rebuild()
 
         // Coalesce all redraw-triggering signals onto the main runloop tick.
@@ -66,7 +71,12 @@ final class MenuBarController: NSObject {
 
     private func rebuild() {
         updateTitle()
-        buildMenu()
+        if trackingMenu == nil {
+            shouldRebuildMenu = false
+            buildMenu()
+        } else {
+            shouldRebuildMenu = true
+        }
     }
 
     // MARK: - Tray title
@@ -205,6 +215,8 @@ final class MenuBarController: NSObject {
 
     private func buildMenu() {
         let menu = NSMenu()
+        menu.delegate = self
+        billingMenuItem = nil
         let m = AppSettings.shared.menuBackends
 
         if m.includesClaude {
@@ -225,6 +237,13 @@ final class MenuBarController: NSObject {
                                    TokenSource.canReload(after: $0) ? .forCodex() : nil
                                },
                                reloadSelector: #selector(reloadCodexToken))
+
+            let billing = NSMenuItem(title: "  " + openAIBilling.menuTitle,
+                                     action: #selector(openOpenAIBilling), keyEquivalent: "")
+            billing.target = self
+            billing.toolTip = "Open OpenAI Platform billing"
+            menu.addItem(billing)
+            billingMenuItem = billing
         }
         if m.includesMistral, AppSettings.shared.mistralEnabled {
             if m.includesClaude || m.includesCodex { menu.addItem(.separator()) }
@@ -257,6 +276,24 @@ final class MenuBarController: NSObject {
         menu.addItem(quit)
 
         statusItem.menu = menu
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        trackingMenu = menu
+        if billingMenuItem?.menu === menu {
+            // Let the menu finish opening before changing its balance row.
+            RunLoop.main.perform(inModes: [.common]) { [weak self] in
+                MainActor.assumeIsolated { self?.openAIBilling.refreshOnMenuOpen() }
+            }
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard trackingMenu === menu else { return }
+        trackingMenu = nil
+        if shouldRebuildMenu {
+            DispatchQueue.main.async { [weak self] in self?.rebuild() }
+        }
     }
 
     /// One menu section per Claude account, each with its own refresh item.
@@ -560,6 +597,10 @@ final class MenuBarController: NSObject {
 
     @objc private func refreshNow() {
         Task { await UsageStore.shared.refreshAll() }
+    }
+
+    @objc private func openOpenAIBilling() {
+        openAIBilling.openBilling()
     }
 
     @objc private func triggerClaudeAccount(_ sender: NSMenuItem) {

@@ -17,17 +17,13 @@
 
 ## Why
 
-I pay for both Claude Pro and ChatGPT Plus. I also have ADHD about quota windows. Manually opening claude.ai → Settings → Usage and then chatgpt.com/codex to inspect the current limits got old, so I built one menu-bar dot that tells me both at a glance.
+AIGauge puts Claude, Codex, and Mistral usage in the macOS menu bar so you can check your limits without opening each provider's dashboard.
 
 Bonus trick: Claude has a `refresh` action that fires a tiny "ping" to *start* its 5-hour window early. Codex exposes the same action only when its live usage response reports the legacy 5-hour mechanism; with the newer weekly limit and banked full resets, AIGauge shows the reset count and expiration dates instead.
 
 ## Usage
 
 ### GUI
-
-<p align="center">
-  <img src="resources/gui2.png" width="360" alt="AIGauge tray menu showing Claude usage and Codex reset credits">
-</p>
 
 Click the tray gauge → menu shows each enabled provider's current usage. When Claude or Codex has available limit resets, it also shows how many remain and when they expire. Resets are redeemed in the provider's own app.
 
@@ -37,6 +33,11 @@ In **Settings → Tray** you choose:
 - which providers get a section in the dropdown menu,
 
 Auto-refresh interval and launch-at-login are in **Settings → General**.
+
+**OpenAI API balance:** in the Codex section of the dropdown, click
+**OpenAI API balance · Connect…** and sign in to OpenAI Platform. Select the API
+organization you want to check. AIGauge reads the balance when you open the
+dropdown, with at least 10 seconds between checks.
 
 **Mistral:** enable it in **Settings → Mistral** and click **Connect Mistral**.
 The default connection reads Mistral Vibe's API key from macOS Keychain and calls
@@ -94,7 +95,7 @@ What AIGauge actually does with those credentials:
 
 - **Usage checks are read-only.** Existing credentials are read without changing provider accounts. Mistral's explicit **Save and connect** action saves your provided key in AIGauge's own Keychain entry; it never changes Vibe's credentials.
 - **Mistral:** the default connection sends an API key only to `api.mistral.ai/v1/billing/budget`. The browser alternative sends cookies only to `admin.mistral.ai/subscription`. Both block redirects. Keys and cookies are never printed. See [MistralGauge](mistral-gauge/README.md).
-- **Provider endpoints only.** Requests go to `claude.ai`, `chatgpt.com`, `api.mistral.ai`, and (browser alternative) `admin.mistral.ai`. Codex API-key mode uses `api.openai.com`.
+- **Provider endpoints only.** Requests go to `claude.ai`, `chatgpt.com`, `api.mistral.ai`, and (browser alternative) `admin.mistral.ai`. Codex API-key mode uses `api.openai.com`. The optional API balance connects to `platform.openai.com` in AIGauge's web view.
 - **No telemetry, no analytics, no phone-home.** The full source is in this repo; `grep` it.
 - **Local storage:** Claude/Codex logs and settings live in `~/.config/claude-gauge/` and `~/.config/codex-gauge/`. A manually saved Mistral key lives in Keychain under service `com.aigauge.mistral`. [`aigauge/reset.sh`](aigauge/reset.sh) clears preferences and CLI files; it preserves Keychain entries.
 

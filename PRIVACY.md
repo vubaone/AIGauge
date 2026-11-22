@@ -8,6 +8,7 @@ login sources happens only through the corresponding user action.
 | --- | --- | --- |
 | Claude | Existing app/browser cookies or configured account credentials | `claude.ai` |
 | Codex | `~/.codex/auth.json` or Codex Auth in Keychain | `chatgpt.com` (API-key mode: `api.openai.com`) |
+| OpenAI API balance | OpenAI Platform sign-in in AIGauge's WebKit session | `platform.openai.com` |
 | Mistral, default | API key from environment, Vibe Keychain, or AIGauge Keychain | `api.mistral.ai/v1/billing/budget` |
 | Mistral, browser alternative | Cookies for the selected Mistral browser profile | `admin.mistral.ai/subscription` |
 
@@ -30,6 +31,11 @@ response bodies or secrets. CLI JSON includes quota amounts, currency, reset
 time and credential-source labels, which should be treated as account data.
 
 ## Local state and explicit actions
+
+The OpenAI API balance uses the website session stored by WebKit for AIGauge.
+Once connected, opening the dropdown loads the Billing Overview and reads the
+displayed balance. AIGauge keeps the amount in memory. Sign out in the billing
+window to end the Platform session.
 
 GUI preferences live in the app's macOS preferences. ClaudeGauge and CodexGauge
 keep settings/logs under their respective `~/.config/*-gauge/` directories; those
