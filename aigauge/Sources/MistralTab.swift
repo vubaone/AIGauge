@@ -25,7 +25,7 @@ struct MistralTab: View {
                         store.clearMistral()
                         if enabled { Task { await store.refreshMistral() } }
                     }
-                Text("Shows monthly API/Studio and Vibe Code allowances. The tray uses Vibe Code when available, otherwise API/Studio. Checks never spend tokens.")
+                Text("Shows the shared monthly Vibe & Studio allowance when available, otherwise API/Studio. The tray uses the displayed allowance. Checks never spend tokens.")
                     .font(.caption).foregroundColor(.secondary)
             }
 
@@ -42,7 +42,7 @@ struct MistralTab: View {
                 }
 
                 if settings.mistralConnectionMethod == .keychain {
-                    Text("Connect with the API key stored by Mistral Vibe in macOS Keychain, or add a key below.")
+                    Text("Reads Mistral’s public API using the API key stored by Mistral Vibe in macOS Keychain, or a key added below. Browser cookies are not read in this mode.")
                         .font(.caption).foregroundColor(.secondary)
                     DisclosureGroup("Use an API key") {
                         SecureField("Mistral API key", text: $apiKey)
@@ -58,6 +58,8 @@ struct MistralTab: View {
                     .disabled(!settings.mistralEnabled || store.isLoadingMistral)
                     Link("Mistral Vibe setup", destination: URL(string: "https://docs.mistral.ai/vibe/code/overview")!)
                 } else {
+                    Text("Connect to the Mistral Admin dashboard using your selected browser session. This reads dashboard billing data rather than the public API.")
+                        .font(.caption).foregroundColor(.secondary)
                     Picker("Browser", selection: $settings.mistralSource) {
                         ForEach(["edge", "chrome", "brave"], id: \.self) { source in
                             Text(humanSourceName(source)).tag(source)
@@ -102,7 +104,7 @@ struct MistralTab: View {
                             MistralFileAccessHelp()
                         }
                     } else if store.mistral.windows.isEmpty {
-                        Text("No data yet — connect your browser or check usage.")
+                        Text("No data yet — connect Mistral or check usage.")
                             .foregroundColor(.secondary)
                     } else {
                         ForEach(store.mistral.windows) { window in WindowRow(window: window) }

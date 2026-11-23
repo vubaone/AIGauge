@@ -1,7 +1,7 @@
 import Foundation
 
-/// Read the structured budget props in the subscription page's Next.js Flight
-/// stream. Never infer a limit from plan names, visible amounts, or bar widths.
+/// Decode billing budgets and legacy subscription-page props without inferring
+/// limits from plan names, visible amounts, or bar widths.
 enum SubscriptionParser {
     private struct Budget: Decodable {
         let usage_percentage: Double
@@ -16,10 +16,21 @@ enum SubscriptionParser {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw MistralError.invalidResponse
         }
-        let response = MistralUsageResponse(api: allowance(object["api_budget"]),
-                                            vibe: allowance(object["vibe_budget"]))
+        let response = effectiveUsage(object)
         guard response.api != nil || response.vibe != nil else { throw MistralError.missingAllowance }
         return response
+    }
+
+    static func parseBrowserBudgetJSON(_ data: Data) throws -> MistralUsageResponse {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["error"] == nil,
+              let result = object["result"] as? [String: Any],
+              let data = result["data"] as? [String: Any],
+              let budgets = data["json"] as? [String: Any] else {
+            throw MistralError.invalidResponse
+        }
+        guard let vibe = allowance(budgets["vibe_budget"]) else { throw MistralError.missingAllowance }
+        return MistralUsageResponse(api: nil, vibe: vibe)
     }
 
     static func parse(html: String) throws -> MistralUsageResponse {
@@ -64,7 +75,7 @@ enum SubscriptionParser {
         }
         guard let first = candidates.first else { throw MistralError.missingAllowance }
         guard candidates.allSatisfy({ $0 == first }) else { throw MistralError.ambiguousAllowance }
-        return first
+        return MistralUsageResponse(api: first.vibe == nil ? first.api : nil, vibe: first.vibe)
     }
 
     private static func hex(_ byte: UInt8) -> Bool {
@@ -83,6 +94,13 @@ enum SubscriptionParser {
         } else if let list = node as? [Any] {
             for value in list { collect(value, depth: depth + 1, into: &candidates) }
         }
+    }
+
+    private static func effectiveUsage(_ budgets: [String: Any]) -> MistralUsageResponse {
+        let vibe = allowance(budgets["vibe_budget"])
+        // The dashboard uses the shared Vibe/Studio budget, not the legacy API
+        // sibling. Retain an API-only fallback for native API-key accounts.
+        return MistralUsageResponse(api: vibe == nil ? allowance(budgets["api_budget"]) : nil, vibe: vibe)
     }
 
     private static func allowance(_ object: Any?) -> MistralAllowance? {

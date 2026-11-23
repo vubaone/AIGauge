@@ -6,7 +6,7 @@ Three small Swift CLIs that report current usage limits for **Claude**, **Codex 
 |---|---|---|---|
 | [`claude-gauge/`](claude-gauge/) — `ClaudeGauge` | claude.ai 5h / 7d / Opus windows | sends a 2-token prompt in a temporary conversation | sessionKey cookie from Claude Desktop / Brave / Chrome |
 | [`codex-gauge/`](codex-gauge/) — `CodexGauge` | `/wham/usage` windows plus banked reset counts and expirations | legacy 5h only: sends a tiny completion after live capability detection | `~/.codex/auth.json` (OAuth JWT, no cookies) |
-| [`mistral-gauge/`](mistral-gauge/) — `MistralGauge` | monthly API/Studio and Vibe Code allowances | no prompts sent to models | billing API + Keychain API key; optional browser session |
+| [`mistral-gauge/`](mistral-gauge/) — `MistralGauge` | monthly Vibe & Studio budget; API/Studio fallback for API-only accounts | no prompts sent to models | API key (Keychain) by default; explicit Browser session (dashboard) |
 | [`aigauge/`](aigauge/) — `AIGauge` | menu-bar GUI wrapper around the three CLIs | — | shells out to ClaudeGauge / CodexGauge / MistralGauge |
 
 All CLIs expose `usage` and `help`. ClaudeGauge and CodexGauge also expose `refresh`.
@@ -14,29 +14,56 @@ MistralGauge reads calendar-month allowances and never sends a prompt.
 
 ## MistralGauge
 
-Enable Mistral in **Settings → Mistral** and click **Connect Mistral**. The
-recommended method uses Mistral Vibe's API key in Keychain. You can provide a key
+Enable Mistral in **Settings → Mistral** and click **Connect Mistral**.
+**API key (Keychain)** remains the default and uses Mistral Vibe's API key in
+Keychain to GET `https://api.mistral.ai/v1/billing/budget`. You can provide a key
 through **Use an API key → Save and connect**; it is verified with the billing
 API before being stored in AIGauge's own Keychain entry. API-key connections do
-not read browser cookies. Background checks never show Keychain prompts.
-The tray shows Vibe Code usage when available, otherwise API/Studio. The menu
-and Mistral tab show both allowances with monetary details and resets.
+not read browser cookies or automatically fall back to them. Background checks
+never show Keychain prompts.
+
+Explicit **Browser session (dashboard)** mode best matches the website. It uses
+an existing Edge/Chrome/Brave login to GET
+`https://admin.mistral.ai/api/local-trpc/billing.budget` with the `input` query
+parameter set to `{"json":null,"meta":{"values":["undefined"],"v":1}}`. Only
+`result.data.json.vibe_budget` is read, matching the dashboard's budget source.
+There is no `/subscription` HTML parsing or HTML fallback. This is an internal
+tRPC endpoint, so its path or schema may change. The public API remains a suitable
+API-key alternative without browser cookie access.
+
+When a valid `vibe_budget` with `initial_budget > 0` exists, the tray, menu, and
+Mistral tab show only **Vibe & Studio**, including monetary details and reset time.
+Any legacy `api_budget` returned alongside it by the public API is suppressed,
+not added to the shared budget. Native API-key mode can fall back to **API/Studio**
+for API-only accounts; browser mode reads only the shared Vibe budget. Missing,
+malformed, or zero-size budgets are not synthesized. A valid budget at 0% usage
+still appears. CLI JSON keeps the optional `api` / `vibe` keys, but normalized
+output omits `api` whenever a valid `vibe` budget is present.
 
 ```sh
 cd mistral-gauge
 swift build -c release --build-system native
 .build/release/MistralGauge usage --json
 .build/release/MistralGauge usage --allow-keychain-prompt --json
-# Advanced alternative, requiring browser file access:
+# Explicit dashboard mode, requiring browser cookie access:
 .build/release/MistralGauge usage --auth browser --source edge --json
 ```
 
 Native manual input uses `--api-key-file`, `--api-key-stdin`, or `MISTRAL_API_KEY`.
-Browser input uses `--cookie-file` or `MISTRAL_COOKIE`; **Grant cookie access…**
-opens Full Disk Access and shows the app to add. Native billing reads require
-`see_org_inference_usage`; API 403 errors never trigger browser file access.
-The integration has synthetic parser/auth/HTTP tests and a successful live
-Keychain/API quota check. The browser alternative still needs live validation.
+Browser mode can read the selected browser profile directly; manual cookie input
+via `--cookie-file` or `MISTRAL_COOKIE` is optional, not required.
+**Grant cookie access…** opens Full Disk Access and shows the app to add; macOS
+still requires user approval. Browser cookie-file access and Safe Storage Keychain permission
+are separate requirements. Native billing reads require `see_org_inference_usage`;
+API 403 errors never trigger browser file access.
+
+Both Mistral HTTP paths refuse redirects and use transient sessions without
+persistent cookies or response caches. No Sentry/analytics headers are copied
+from the browser, and no cookies are hardcoded. The integration has synthetic
+parser/auth/HTTP tests and live Keychain/API quota validation. The dashboard tRPC
+request and cookie extraction from an existing Edge profile were also verified
+live without new prompts or pasted cookies. This does not establish live coverage
+of every first-run or permission UI flow; other installations may need approval.
 See [MistralGauge documentation](mistral-gauge/README.md).
 
 ---
@@ -319,7 +346,7 @@ Set up a periodic cleanup if you call them frequently (one file per invocation c
 ## Security notes
 
 - **Read-only auth sources.** Both CLIs only *read* cookie databases (Claude) or auth JSON / Keychain (Codex). They never write back.
-- **Local only.** No telemetry. Only HTTPS calls to `claude.ai` and `chatgpt.com`.
+- **Provider endpoints only.** No telemetry. Usage checks contact `claude.ai`, `chatgpt.com`, `api.openai.com` (Codex API-key mode), `api.mistral.ai/v1/billing/budget` (Mistral API key), or `admin.mistral.ai/api/local-trpc/billing.budget` (explicit Mistral dashboard mode). The optional OpenAI API balance uses `platform.openai.com`. Mistral API-key mode never reads browser cookies; neither Mistral mode copies Sentry/analytics headers or follows redirects. See [Privacy](PRIVACY.md).
 - **Tokens live on disk / in Keychain.** Anything that can read `~/.codex/auth.json` or your browser cookies can impersonate you on those services — standard threat model for any session-based tool.
 
 ---
@@ -383,4 +410,4 @@ AIGauge/
 
 Built by VUBA (dev@vuba.one) — [vuba.one](https://vuba.one).
 
-Released under MIT. No telemetry, no third-party services beyond the official Claude and ChatGPT/Codex APIs.
+Released under MIT. No telemetry; usage checks contact provider endpoints only, including Mistral's public billing API or its explicitly selected internal dashboard endpoint.

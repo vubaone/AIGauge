@@ -3,7 +3,7 @@ import Foundation
 /// Read-only billing API, with an explicit browser-session alternative.
 /// Redirects are refused so neither keys nor cookies leave their original host.
 final class MistralAPIClient: NSObject, URLSessionTaskDelegate {
-    static let subscriptionURL = URL(string: "https://admin.mistral.ai/subscription")!
+    static let browserBudgetURL = URL(string: "https://admin.mistral.ai/api/local-trpc/billing.budget?input=%7B%22json%22%3Anull%2C%22meta%22%3A%7B%22values%22%3A%5B%22undefined%22%5D%2C%22v%22%3A1%7D%7D")!
     static let budgetURL = URL(string: "https://api.mistral.ai/v1/billing/budget")!
     private let configuration: URLSessionConfiguration
 
@@ -14,14 +14,13 @@ final class MistralAPIClient: NSObject, URLSessionTaskDelegate {
 
     func fetchUsage(cookieHeader: String) async throws -> (usage: MistralUsageResponse, status: Int) {
         let cookie = try CredentialExtractor.validatedHeader(cookieHeader)
-        var request = URLRequest(url: Self.subscriptionURL)
+        var request = URLRequest(url: Self.browserBudgetURL)
         request.httpShouldHandleCookies = false
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
-        request.setValue("text/html", forHTTPHeaderField: "Accept")
-        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("nextjs-react", forHTTPHeaderField: "x-trpc-source")
         let (data, status) = try await fetch(request, billing: false)
-        guard let html = String(data: data, encoding: .utf8) else { throw MistralError.invalidResponse }
-        return (try SubscriptionParser.parse(html: html), status)
+        return (try SubscriptionParser.parseBrowserBudgetJSON(data), status)
     }
 
     func fetchUsage(apiKey: String) async throws -> (usage: MistralUsageResponse, status: Int) {

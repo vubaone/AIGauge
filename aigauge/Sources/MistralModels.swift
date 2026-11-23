@@ -4,7 +4,7 @@ enum MistralConnectionMethod: String, CaseIterable, Identifiable {
     case keychain, browser
     var id: String { rawValue }
     var label: String {
-        self == .keychain ? "Keychain (recommended)" : "Browser session (advanced)"
+        self == .keychain ? "API key (Keychain)" : "Browser session (dashboard)"
     }
 }
 
@@ -50,18 +50,19 @@ struct MistralUsageJSON: Decodable {
 
 extension UsageSnapshot {
     static func fromMistral(_ json: MistralUsageJSON) -> UsageSnapshot {
-        var windows: [UsageWindow] = []
-        for (label, allowance) in [("API/Studio", json.api), ("Vibe Code", json.vibe)] {
-            if let allowance, allowance.isValid {
-                windows.append(UsageWindow(label: label, percent: allowance.usedPercent,
-                    resetText: allowance.resetLabel ?? "unknown", detailText: allowance.detailText))
-            }
+        let selected: (label: String, allowance: MistralUsageJSON.Allowance)
+        // Older helpers may return both budgets; prefer the shared allowance, not both.
+        if let vibe = json.vibe, vibe.isValid {
+            selected = ("Vibe & Studio", vibe)
+        } else if let api = json.api, api.isValid {
+            selected = ("API/Studio", api)
+        } else {
+            return .failure("Mistral", "No included Mistral allowance returned.")
         }
-        guard !windows.isEmpty else { return .failure("Mistral", "No included Mistral allowance returned.") }
-        // Vibe is the coding allowance; API is the fallback for API-only accounts.
-        let primary = windows.first(where: { $0.label == "Vibe Code" }) ?? windows[0]
-        return UsageSnapshot(serviceName: "Mistral", windows: windows,
-            primaryPercent: primary.percent,
+        let window = UsageWindow(label: selected.label, percent: selected.allowance.usedPercent,
+            resetText: selected.allowance.resetLabel ?? "unknown", detailText: selected.allowance.detailText)
+        return UsageSnapshot(serviceName: "Mistral", windows: [window],
+            primaryPercent: window.percent,
             lastUpdated: json.observedAt.flatMap(parseCodexTimestamp) ?? Date(), error: nil)
     }
 }

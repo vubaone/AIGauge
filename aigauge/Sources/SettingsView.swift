@@ -124,7 +124,7 @@ struct TrayTab: View {
                     ForEach(BackendSelection.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.menu)
-                Text("Each chosen provider gets a section with its current usage. Mistral shows monthly API/Studio and Vibe Code allowances.")
+                Text("Each chosen provider gets a section with its current usage. Mistral prefers the shared Vibe & Studio monthly allowance, with API/Studio as a fallback.")
                     .font(.caption).foregroundColor(.secondary)
             }
         }

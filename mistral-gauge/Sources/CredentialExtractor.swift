@@ -5,7 +5,7 @@ import LocalAuthentication
 import CommonCrypto
 import Darwin
 
-/// Reads only cookies applicable to Mistral's subscription URL. Browser databases
+/// Reads only cookies applicable to Mistral's browser billing URL. Browser databases
 /// are opened read-only (including their WAL); no cookie or token cache is saved.
 enum CredentialExtractor {
     enum Source: String, CaseIterable {
@@ -53,7 +53,7 @@ enum CredentialExtractor {
                   let pair = part.trimmingCharacters(in: .whitespaces).split(separator: "=", maxSplits: 1)
                   return pair.count == 2 && pair[0].hasPrefix("ory_session_") && !pair[1].isEmpty
               }) else {
-            throw MistralError.credentials("Missing or invalid Mistral session cookie. Expected a Cookie header containing ory_session_*. API keys cannot read this subscription page.")
+            throw MistralError.credentials("Missing or invalid Mistral session cookie. Expected a Cookie header containing ory_session_*. API keys cannot read this browser billing endpoint.")
         }
         return value
     }
@@ -97,7 +97,8 @@ enum CredentialExtractor {
         let sql = """
         SELECT host_key, name, value, encrypted_value FROM cookies
         WHERE host_key IN ('admin.mistral.ai', '.admin.mistral.ai', '.mistral.ai', 'mistral.ai')
-          AND path IN ('/', '/subscription')
+          AND path IN ('/', '/api', '/api/', '/api/local-trpc', '/api/local-trpc/',
+                       '/api/local-trpc/billing.budget')
           AND (expires_utc = 0 OR expires_utc > ?)
         ORDER BY length(path) DESC, length(host_key) DESC, creation_utc DESC
         """

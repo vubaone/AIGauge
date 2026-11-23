@@ -15,7 +15,7 @@ struct CLIOptions {
 
 enum CLI {
     static let helpText = """
-    MistralGauge — Mistral monthly allowance (API/Studio and Vibe Code)
+    MistralGauge — Mistral monthly allowance (Vibe & Studio; API-only fallback)
 
     USAGE:
       MistralGauge usage [options]
@@ -42,8 +42,9 @@ enum CLI {
 
     BROWSER (explicit --auth browser, --source, --profile, or --cookie-file):
     --cookie-file, MISTRAL_COOKIE, then the selected browser's cookies.
-    Only GET https://admin.mistral.ai/subscription. This alternative can need
-    file access permission and Safe Storage access. Cookies are never saved.
+    Only GET https://admin.mistral.ai/api/local-trpc/billing.budget with the
+    dashboard's query input. This alternative can need file access permission
+    and Safe Storage access. Cookies are never saved.
     Automatic checks never prompt for Keychain access.
     EXIT CODES: 0 success, 2 bad arguments, 3 missing credentials, 4 HTTP/parse error.
     """
@@ -126,7 +127,7 @@ enum CLI {
         }
         do {
             if options.verbose {
-                let endpoint = options.auth == .keychain ? MistralAPIClient.budgetURL : MistralAPIClient.subscriptionURL
+                let endpoint = options.auth == .keychain ? MistralAPIClient.budgetURL : MistralAPIClient.browserBudgetURL
                 fputs("GET \(endpoint.absoluteString) [\(credentials.source)]\n", stderr)
             }
             let result = try await fetchUsage(credentials: credentials, saveKey: options.command == "connect")
@@ -203,11 +204,13 @@ enum CLI {
     }
 
     static func usageHuman(_ usage: MistralUsageResponse) -> String {
-        [("API/Studio", usage.api), ("Vibe Code", usage.vibe)].map { label, allowance in
-            guard let allowance else { return "\(label): allowance unavailable" }
+        let allowances = usage.vibe != nil ? [("Vibe & Studio", usage.vibe)] : [("API/Studio", usage.api)]
+        let lines = allowances.compactMap { label, allowance -> String? in
+            guard let allowance else { return nil }
             return String(format: "%@: %.1f%% · %.2f / %.2f %@ used · %.2f remaining · resets in %@",
                           label, allowance.usedPercent, allowance.used, allowance.total,
                           allowance.currency, allowance.remaining, allowance.resetLabel)
-        }.joined(separator: "\n")
+        }
+        return lines.isEmpty ? "Mistral: allowance unavailable" : lines.joined(separator: "\n")
     }
 }

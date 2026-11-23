@@ -5,10 +5,12 @@ private final class StubProtocol: URLProtocol {
     static var status = 200
     static var body = Data()
     static var request: URLRequest?
+    static var requestCount = 0
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.request = request
+        Self.requestCount += 1
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status,
                                        httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -24,20 +26,28 @@ final class HTTPTests: XCTestCase {
         StubProtocol.status = status
         StubProtocol.body = Data(html.utf8)
         StubProtocol.request = nil
+        StubProtocol.requestCount = 0
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubProtocol.self]
         return MistralAPIClient(configuration: configuration)
     }
 
-    func testReadOnlyRequestAndStructuredQuotaResponse() async throws {
-        let props = #"1:{"budget":{"vibe_budget":{"usage_percentage":64,"initial_budget":75,"currency":"USD"}}}"# + "\n"
-        let argument = String(decoding: try JSONSerialization.data(withJSONObject: [1, props]), as: UTF8.self)
-        let api = client(status: 200, html: "<script>self.__next_f.push(\(argument))</script>")
+    func testBrowserReadsDashboardJSONWithoutAPIKeyOrTrackingHeaders() async throws {
+        let api = client(status: 200, html: "{\"result\":{\"data\":{\"json\":\(budgetJSON)}}}")
         let response = try await api.fetchUsage(cookieHeader: "ory_session_test=do-not-log")
         XCTAssertEqual(response.usage.vibe?.used, 48.0)
         let request = try XCTUnwrap(StubProtocol.request)
         XCTAssertEqual(request.httpMethod, "GET")
-        XCTAssertEqual(request.url, MistralAPIClient.subscriptionURL)
+        XCTAssertEqual(request.url, MistralAPIClient.browserBudgetURL)
+        let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.path, "/api/local-trpc/billing.budget")
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "input" })?.value,
+                       #"{"json":null,"meta":{"values":["undefined"],"v":1}}"#)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-trpc-source"), "nextjs-react")
+        for header in ["Authorization", "baggage", "sentry-trace", "User-Agent", "sec-ch-ua"] {
+            XCTAssertNil(request.value(forHTTPHeaderField: header))
+        }
         XCTAssertNil(request.httpBody)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "ory_session_test=do-not-log")
         XCTAssertFalse(request.httpShouldHandleCookies)
@@ -114,17 +124,37 @@ final class HTTPTests: XCTestCase {
             _ = try await client(status: 200, html: "<html>Sign in</html>")
                 .fetchUsage(cookieHeader: "ory_session_test=secret")
             XCTFail("Login page must not decode to 0%")
-        } catch { XCTAssertTrue(error.localizedDescription.contains("allowance")) }
+        } catch { XCTAssertTrue(error.localizedDescription.contains("Invalid Mistral")) }
+    }
+
+    func testBrowserParseFailuresNeverFallBackToHTMLOrExposeBodies() async {
+        let bodies = [
+            budgetJSON,
+            #"{"result":{"data":{"json":{}}}}"#,
+            #"{"error":{"json":{"message":"fixture-sensitive-response"}}}"#,
+            "<html>fixture-sensitive-response</html>"
+        ]
+        for body in bodies {
+            do {
+                _ = try await client(status: 200, html: body).fetchUsage(cookieHeader: "ory_session_test=fixture-session")
+                XCTFail("Expected dashboard parse failure")
+            } catch {
+                XCTAssertFalse(error.localizedDescription.contains("fixture-sensitive-response"))
+                XCTAssertFalse(error.localizedDescription.contains("fixture-session"))
+            }
+            XCTAssertEqual(StubProtocol.requestCount, 1)
+            XCTAssertEqual(StubProtocol.request?.url, MistralAPIClient.browserBudgetURL)
+        }
     }
 
     func testRedirectDelegateRefusesCredentialForwarding() {
         let api = MistralAPIClient()
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
-        let redirect = HTTPURLResponse(url: MistralAPIClient.subscriptionURL, statusCode: 302,
+        let redirect = HTTPURLResponse(url: MistralAPIClient.browserBudgetURL, statusCode: 302,
                                        httpVersion: nil, headerFields: ["Location": "https://example.com/"])!
         var invoked = false
-        api.urlSession(session, task: session.dataTask(with: MistralAPIClient.subscriptionURL),
+        api.urlSession(session, task: session.dataTask(with: MistralAPIClient.browserBudgetURL),
                        willPerformHTTPRedirection: redirect,
                        newRequest: URLRequest(url: URL(string: "https://example.com/")!)) { request in
             invoked = true

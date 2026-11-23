@@ -13,7 +13,8 @@ final class BackendModelsTests: XCTestCase {
     func testMistralConnectionMethodsSeparateKeychainFromBrowserPermissions() {
         XCTAssertEqual(MistralConnectionMethod(rawValue: "keychain"), .keychain)
         XCTAssertEqual(MistralConnectionMethod(rawValue: "browser"), .browser)
-        XCTAssertTrue(MistralConnectionMethod.keychain.label.contains("recommended"))
+        XCTAssertEqual(MistralConnectionMethod.keychain.label, "API key (Keychain)")
+        XCTAssertEqual(MistralConnectionMethod.browser.label, "Browser session (dashboard)")
     }
 
     func testMistralFileAccessHelpSurvivesCLIErrorTruncationAndRecognizesOlderHelper() {
@@ -26,23 +27,40 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertFalse(MistralAccessHelp.isFileAccessError("Browser cookie database is busy."))
     }
 
-    func testMistralMapsBothMonthlyAllowancesAndUsesVibeInTray() throws {
+    func testMistralPrefersSharedAllowanceFromOlderHelperReturningBoth() throws {
         let data = Data(#"""
         {"httpStatus":200,"source":"edge:Default","observedAt":"2026-11-15T00:00:00Z",
-         "api":{"usedPercent":0,"total":30,"used":0,"remaining":30,"currency":"USD","resetLabel":"16 days"},
-         "vibe":{"usedPercent":64,"total":75,"used":48.0,"remaining":27.0,"currency":"USD",
+         "api":{"usedPercent":80,"total":15,"used":12,"remaining":3,"currency":"USD","resetLabel":"16 days"},
+         "vibe":{"usedPercent":64,"total":150,"used":96.0,"remaining":54.0,"currency":"USD",
                  "resetsAt":"2026-12-01T00:00:00Z","resetLabel":"16 days"}}
         """#.utf8)
         let json = try JSONDecoder().decode(MistralUsageJSON.self, from: data)
         let snapshot = UsageSnapshot.fromMistral(json)
-        XCTAssertEqual(snapshot.windows.map(\.label), ["API/Studio", "Vibe Code"])
-        XCTAssertEqual(snapshot.windows.map(\.percent), [0, 64])
+        XCTAssertNil(snapshot.error)
+        XCTAssertEqual(snapshot.windows.map(\.label), ["Vibe & Studio"])
+        XCTAssertEqual(snapshot.windows.map(\.percent), [64])
         XCTAssertEqual(snapshot.primaryPercent, 64)
         XCTAssertEqual(snapshot.lastUpdated, parseCodexTimestamp("2026-11-15T00:00:00Z"))
         let decimalSeparator = Locale.current.decimalSeparator ?? "."
-        XCTAssertTrue(snapshot.windows[1].detailText?.contains("48\(decimalSeparator)00") == true)
+        XCTAssertTrue(snapshot.windows.first?.detailText?.contains("96\(decimalSeparator)00") == true)
         XCTAssertFalse(snapshot.supportsWindowRefresh)
         XCTAssertNil(snapshot.availableResetCount)
+    }
+
+    func testMistralMapsCurrentVibeOnlyAllowanceEvenWhenUnused() throws {
+        let data = Data(#"""
+        {"httpStatus":200,"source":"edge:Default","observedAt":"2026-11-15T00:00:00Z",
+         "vibe":{"usedPercent":0,"total":150,"used":0,"remaining":150,"currency":"USD",
+                 "resetsAt":"2026-12-01T00:00:00Z","resetLabel":"16 days"}}
+        """#.utf8)
+        let json = try JSONDecoder().decode(MistralUsageJSON.self, from: data)
+        let snapshot = UsageSnapshot.fromMistral(json)
+        XCTAssertNil(snapshot.error)
+        XCTAssertEqual(snapshot.windows.map(\.label), ["Vibe & Studio"])
+        XCTAssertEqual(snapshot.windows.map(\.percent), [0])
+        XCTAssertEqual(snapshot.primaryPercent, 0)
+        XCTAssertEqual(snapshot.windows.first?.resetText, "16 days")
+        XCTAssertEqual(snapshot.lastUpdated, parseCodexTimestamp("2026-11-15T00:00:00Z"))
     }
 
     func testMistralMissingQuotaFailsAndAPIOnlyUsesAPI() throws {
@@ -51,8 +69,49 @@ final class BackendModelsTests: XCTestCase {
         XCTAssertNil(UsageSnapshot.fromMistral(empty).primaryPercent)
         let apiOnly = Data(#"{"api":{"usedPercent":12,"total":100,"used":12,"remaining":88,"currency":"EUR"}}"#.utf8)
         let snapshot = UsageSnapshot.fromMistral(try JSONDecoder().decode(MistralUsageJSON.self, from: apiOnly))
+        XCTAssertNil(snapshot.error)
+        XCTAssertEqual(snapshot.windows.map(\.label), ["API/Studio"])
+        XCTAssertEqual(snapshot.windows.map(\.percent), [12])
         XCTAssertEqual(snapshot.primaryPercent, 12)
         XCTAssertEqual(snapshot.windows.first?.resetText, "unknown")
+    }
+
+    func testMistralOmitsMissingNullAndZeroSizeAPIAllowance() throws {
+        let vibe = #""vibe":{"usedPercent":25,"total":120,"used":30,"remaining":90,"currency":"USD"}"#
+        let apiAllowances: [String?] = [
+            nil, "null",
+            #"{"usedPercent":0,"total":0,"used":0,"remaining":0,"currency":"USD"}"#
+        ]
+        for api in apiAllowances {
+            let fields = vibe + (api.map { ",\"api\":\($0)" } ?? "")
+            let json = try JSONDecoder().decode(MistralUsageJSON.self, from: Data("{\(fields)}".utf8))
+            let snapshot = UsageSnapshot.fromMistral(json)
+            XCTAssertNil(snapshot.error)
+            XCTAssertEqual(snapshot.windows.map(\.label), ["Vibe & Studio"])
+            XCTAssertEqual(snapshot.windows.map(\.percent), [25])
+            XCTAssertEqual(snapshot.primaryPercent, 25)
+        }
+    }
+
+    func testMistralFallsBackToAPIWhenVibeIsMissingNullZeroSizeOrInvalid() throws {
+        let api = #""api":{"usedPercent":80,"total":15,"used":12,"remaining":3,"currency":"USD"}"#
+        let vibeAllowances: [String?] = [
+            nil, "null",
+            #"{"usedPercent":0,"total":0,"used":0,"remaining":0,"currency":"USD"}"#,
+            #"{"usedPercent":0,"total":-150,"used":0,"remaining":0,"currency":"USD"}"#,
+            #"{"usedPercent":-1,"total":150,"used":0,"remaining":150,"currency":"USD"}"#,
+            #"{"usedPercent":0,"total":150,"used":-1,"remaining":150,"currency":"USD"}"#,
+            #"{"usedPercent":100,"total":150,"used":150,"remaining":-1,"currency":"USD"}"#
+        ]
+        for vibe in vibeAllowances {
+            let fields = api + (vibe.map { ",\"vibe\":\($0)" } ?? "")
+            let json = try JSONDecoder().decode(MistralUsageJSON.self, from: Data("{\(fields)}".utf8))
+            let snapshot = UsageSnapshot.fromMistral(json)
+            XCTAssertNil(snapshot.error)
+            XCTAssertEqual(snapshot.windows.map(\.label), ["API/Studio"])
+            XCTAssertEqual(snapshot.windows.map(\.percent), [80])
+            XCTAssertEqual(snapshot.primaryPercent, 80)
+        }
     }
 
     func testProviderSelectionPreservesExistingChoicesWhenMistralIsToggled() {

@@ -40,18 +40,31 @@ organization you want to check. AIGauge reads the balance when you open the
 dropdown, with at least 10 seconds between checks.
 
 **Mistral:** enable it in **Settings → Mistral** and click **Connect Mistral**.
-The default connection reads Mistral Vibe's API key from macOS Keychain and calls
-Mistral's billing API. You can also use **Use an API key → Save and connect**;
-the key is verified before it is saved in AIGauge's own Keychain entry. Both monthly
-API/Studio and Vibe Code allowances show used / total / remaining amounts and
-reset time. The tray uses Vibe Code when available, otherwise API/Studio.
-Enabling Mistral adds it to your tray/menu selection; the Tray tab controls
-visibility and order. Background checks never request Keychain access.
-**Browser session (advanced)** remains available for an existing Edge/Chrome/Brave
-login. Its **Grant cookie access…** button opens the macOS permission page and
-shows a draggable AIGauge app icon. File access still needs the user's approval
-in System Settings. The Keychain/API connection has been verified with live
-quota data; the browser alternative still needs live validation.
+**API key (Keychain)** remains the default: it reads Mistral Vibe's API key from
+macOS Keychain and calls Mistral's public billing API, without accessing browser
+cookies. You can also use **Use an API key → Save and connect**; the key is
+verified before it is saved in AIGauge's own Keychain entry. Background checks
+never show Keychain prompts, and API-key errors never trigger browser access.
+
+For the closest match to the website, explicitly select
+**Browser session (dashboard)** with an existing Edge/Chrome/Brave login. It calls the dashboard's
+authenticated `billing.budget` tRPC JSON endpoint, not the `/subscription` HTML
+page, with no HTML fallback. This internal endpoint may change. API-key mode
+remains a suitable alternative when you prefer not to grant browser access.
+
+A valid shared Vibe budget is shown alone as **Vibe & Studio**, with used / total /
+remaining amounts and reset time; any legacy API budget is suppressed. API-key
+mode can fall back to **API/Studio** for API-only accounts. Missing or zero-size
+budgets are never synthesized, and budgets are never added together. The tray
+uses the same selected budget. Enabling Mistral adds it to your tray/menu
+selection; the Tray tab controls visibility and order.
+
+Browser mode may need cookie-file access and the browser's Safe Storage Keychain
+permission. **Grant cookie access…** opens the macOS permission page and shows a
+draggable AIGauge app icon; the user must approve file access in System Settings.
+Live checks covered Keychain/API usage and the dashboard tRPC/cookie path through
+an existing Edge profile without new prompts or pasted cookies. This does not
+mean every first-run or permission UI flow has been live-tested.
 
 ### CLI
 
@@ -67,7 +80,7 @@ CodexGauge  refresh         # Legacy 5h only; refuses otherwise without spending
 
 MistralGauge usage --json   # Mistral API key from Keychain
 MistralGauge usage --allow-keychain-prompt --json  # First connection
-# Advanced browser alternative:
+# Explicit dashboard mode (requires browser cookie access):
 MistralGauge usage --auth browser --source edge --profile "Profile 1" --json
 ```
 
@@ -77,7 +90,7 @@ Drop them into `cron` / `launchd` / your fav scheduler. See [FULL_README.md](FUL
 
 ## First run — what those popups are
 
-macOS will throw one or two **Keychain access prompts** the first time AIGauge looks up your credentials. They look scary; they're not. Here's the cheat sheet:
+macOS may show **Keychain access prompts** when AIGauge first reads your credentials. Here are common Claude/Codex examples; Mistral's separate permissions are described above:
 
 | Prompt | What it really means | Safe to allow? |
 |---|---|---|
@@ -89,12 +102,12 @@ macOS will throw one or two **Keychain access prompts** the first time AIGauge l
 > [!IMPORTANT]
 > **Click the "Always Allow" button**, not just "Allow". "Allow" is one-shot — you'd see the same dialog every 60 seconds when the GUI refreshes. "Always Allow" persists the permission.
 
-After the first successful extraction, the credentials are cached in `~/.config/claude-gauge/settings.json` so even *that* one prompt only happens once per install (or until you run `reset.sh`). Subsequent refreshes don't touch the keychain at all.
+For Claude, after the first successful extraction, credentials are cached in `~/.config/claude-gauge/settings.json` so even *that* one prompt only happens once per install (or until you run `reset.sh`). Subsequent Claude refreshes use that cache. Mistral does not save browser cookies in a credential cache; its Keychain and browser-file permissions still apply.
 
 What AIGauge actually does with those credentials:
 
 - **Usage checks are read-only.** Existing credentials are read without changing provider accounts. Mistral's explicit **Save and connect** action saves your provided key in AIGauge's own Keychain entry; it never changes Vibe's credentials.
-- **Mistral:** the default connection sends an API key only to `api.mistral.ai/v1/billing/budget`. The browser alternative sends cookies only to `admin.mistral.ai/subscription`. Both block redirects. Keys and cookies are never printed. See [MistralGauge](mistral-gauge/README.md).
+- **Mistral:** **API key (Keychain)** sends an API key only to `https://api.mistral.ai/v1/billing/budget`. Explicit **Browser session (dashboard)** sends cookies only to `https://admin.mistral.ai/api/local-trpc/billing.budget`. Both use transient HTTP sessions and block redirects. No Sentry/analytics headers are copied from the browser; no cookies are hardcoded or printed. See [MistralGauge](mistral-gauge/README.md).
 - **Provider endpoints only.** Requests go to `claude.ai`, `chatgpt.com`, `api.mistral.ai`, and (browser alternative) `admin.mistral.ai`. Codex API-key mode uses `api.openai.com`. The optional API balance connects to `platform.openai.com` in AIGauge's web view.
 - **No telemetry, no analytics, no phone-home.** The full source is in this repo; `grep` it.
 - **Local storage:** Claude/Codex logs and settings live in `~/.config/claude-gauge/` and `~/.config/codex-gauge/`. A manually saved Mistral key lives in Keychain under service `com.aigauge.mistral`. [`aigauge/reset.sh`](aigauge/reset.sh) clears preferences and CLI files; it preserves Keychain entries.
@@ -142,7 +155,7 @@ MIT.
 
 - `claude/` is a CLI-only fork of [Decryptu/claude-gauge](https://github.com/Decryptu/claude-gauge) (MIT). All the cookie-decrypt cleverness is theirs.
 - `codex/` was reverse-engineered fresh against `/backend-api/wham/usage` and the public Codex CLI source.
-- `mistral-gauge/` reads Mistral's billing API for monthly API and Vibe allowances, with an explicit browser-session alternative.
+- `mistral-gauge/` reads Mistral's monthly shared Vibe & Studio budget (API/Studio fallback for API-only accounts), using a billing API key by default or an explicit dashboard browser session.
 - `aigauge/` ties them together in a tiny Swift/SwiftUI menu-bar wrapper.
 
 ## About

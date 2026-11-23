@@ -19,10 +19,9 @@ final class UsageTests: XCTestCase {
         }.joined()
     }
 
-    func testSubscriptionIncludesZeroUsageAndSeparateAllowances() throws {
+    func testLegacySubscriptionPropsPreferSharedAllowance() throws {
         let usage = try SubscriptionParser.parse(html: page("a:[\"$\",\"component\",null,\(budget)]\n"))
-        XCTAssertEqual(usage.api?.usedPercent, 0)
-        XCTAssertEqual(usage.api?.remaining, 30)
+        XCTAssertNil(usage.api)
         XCTAssertEqual(try XCTUnwrap(usage.vibe?.used), 48.0, accuracy: 0.0001)
         XCTAssertEqual(try XCTUnwrap(usage.vibe?.remaining), 27.0, accuracy: 0.0001)
         XCTAssertNotNil(usage.vibe?.resetsAt.flatMap(MistralAllowance.parseDate))
@@ -39,7 +38,8 @@ final class UsageTests: XCTestCase {
         let flight = "1:T\(String(spoof.utf8.count, radix: 16)),\(spoof)\n2:{\"notBudget\":true}\n"
         XCTAssertThrowsError(try SubscriptionParser.parse(html: page(flight)))
         let real = try SubscriptionParser.parse(html: page(flight + "3:\(budget)\n"))
-        XCTAssertEqual(real.api?.total, 30)
+        XCTAssertEqual(real.vibe?.total, 75)
+        XCTAssertNil(real.api)
     }
 
     func testIgnoresBudgetLikeStringsAndNonFlightScripts() throws {
@@ -51,9 +51,14 @@ final class UsageTests: XCTestCase {
 
     func testDuplicatePropsAreFineButConflictingAccountsFail() throws {
         XCTAssertNoThrow(try SubscriptionParser.parse(html: page("1:\(budget)\n2:\(budget)\n")))
-        let other = budget.replacingOccurrences(of: "\"initial_budget\":75", with: "\"initial_budget\":300")
-        XCTAssertThrowsError(try SubscriptionParser.parse(html: page("1:\(budget)\n2:\(other)\n"))) { error in
-            guard case MistralError.ambiguousAllowance = error else { return XCTFail("Unexpected error \(error)") }
+        let others = [
+            budget.replacingOccurrences(of: "\"initial_budget\":75", with: "\"initial_budget\":300"),
+            budget.replacingOccurrences(of: "\"initial_budget\":30", with: "\"initial_budget\":60")
+        ]
+        for other in others {
+            XCTAssertThrowsError(try SubscriptionParser.parse(html: page("1:\(budget)\n2:\(other)\n"))) { error in
+                guard case MistralError.ambiguousAllowance = error else { return XCTFail("Unexpected error \(error)") }
+            }
         }
     }
 
@@ -84,8 +89,48 @@ final class UsageTests: XCTestCase {
         let vibe = try XCTUnwrap(object["vibe"] as? [String: Any])
         XCTAssertEqual(vibe["used"] as? Double, 48.0)
         XCTAssertEqual(vibe["currency"] as? String, "USD")
+        XCTAssertNil(object["api"])
         XCTAssertTrue(CLI.usageHuman(usage).contains("48.00 / 75.00 USD"))
         XCTAssertTrue(CLI.usageHuman(MistralUsageResponse(api: nil, vibe: nil)).contains("unavailable"))
+    }
+
+    func testHumanOutputOmitsUnreportedAllowances() {
+        let allowance = MistralAllowance(usedPercent: 25, total: 120, currency: "USD", resetsAt: nil)
+        let vibeOnly = CLI.usageHuman(MistralUsageResponse(api: nil, vibe: allowance))
+        XCTAssertTrue(vibeOnly.hasPrefix("Vibe & Studio:"))
+        XCTAssertFalse(vibeOnly.contains("API/Studio"))
+        XCTAssertFalse(vibeOnly.contains("unavailable"))
+        XCTAssertEqual(vibeOnly.components(separatedBy: "\n").count, 1)
+
+        let apiOnly = CLI.usageHuman(MistralUsageResponse(api: allowance, vibe: nil))
+        XCTAssertTrue(apiOnly.hasPrefix("API/Studio:"))
+        XCTAssertFalse(apiOnly.contains("Vibe & Studio"))
+        XCTAssertEqual(apiOnly.components(separatedBy: "\n").count, 1)
+    }
+
+    func testUnavailableAPIBudgetIsOmittedWhileVibeRemains() throws {
+        let vibe = #""vibe_budget":{"usage_percentage":25,"initial_budget":120,"currency":"USD"}"#
+        let apiBudgets: [String?] = [
+            nil, "null",
+            #"{"usage_percentage":0,"initial_budget":0,"currency":"USD"}"#,
+            #"{"usage_percentage":0,"initial_budget":"invalid","currency":"USD"}"#
+        ]
+        for api in apiBudgets {
+            let fields = vibe + (api.map { ",\"api_budget\":\($0)" } ?? "")
+            let native = try SubscriptionParser.parseBudgetJSON(Data("{\(fields)}".utf8))
+            let browser = try SubscriptionParser.parse(html: page("1:{\"budget\":{\(fields)}}\n"))
+            XCTAssertEqual(native, browser)
+            XCTAssertNil(native.api)
+            XCTAssertEqual(native.vibe?.total, 120)
+            XCTAssertEqual(native.vibe?.used, 30)
+            XCTAssertEqual(native.vibe?.remaining, 90)
+
+            let output = MistralUsageOutput(httpStatus: 200, source: "fixture", observedAt: "2026-11-01T00:00:00Z",
+                                            api: native.api, vibe: native.vibe)
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(output)) as? [String: Any])
+            XCTAssertNil(object["api"])
+            XCTAssertNotNil(object["vibe"])
+        }
     }
 
     func testArgumentsAndCookieValidation() throws {
@@ -172,14 +217,73 @@ final class UsageTests: XCTestCase {
         }
     }
 
-    func testPublicBillingJSONUsesTheSameAllowanceModelAsBrowserProps() throws {
+    func testPublicBillingJSONPrefersSharedBudgetOverLegacyAPI() throws {
         let data = Data(#"{"api_budget":{"usage_percentage":0,"initial_budget":30,"currency":"USD"},"vibe_budget":{"usage_percentage":64,"initial_budget":75,"currency":"USD","reset_at":"2026-12-01T00:00:00Z"}}"#.utf8)
         let usage = try SubscriptionParser.parseBudgetJSON(data)
         XCTAssertEqual(usage.vibe?.used, 48.0)
-        XCTAssertEqual(usage.api?.usedPercent, 0)
+        XCTAssertNil(usage.api)
         XCTAssertEqual(usage.vibe?.currency, "USD")
         XCTAssertThrowsError(try SubscriptionParser.parseBudgetJSON(Data("{}".utf8)))
         XCTAssertThrowsError(try SubscriptionParser.parseBudgetJSON(Data("<html>Forbidden</html>".utf8)))
+    }
+
+    func testPublicAPIOnlyFallbackKeepsReportedZeroUsage() throws {
+        let api = #""api_budget":{"usage_percentage":0,"initial_budget":30,"currency":"USD"}"#
+        for vibe in ["null", #"{"initial_budget":0,"usage_percentage":0,"currency":"USD"}"#,
+                     #"{"initial_budget":"invalid","usage_percentage":0,"currency":"USD"}"#] {
+            let usage = try SubscriptionParser.parseBudgetJSON(Data("{\(api),\"vibe_budget\":\(vibe)}".utf8))
+            XCTAssertNil(usage.vibe)
+            XCTAssertEqual(usage.api?.usedPercent, 0)
+            XCTAssertEqual(usage.api?.remaining, 30)
+        }
+    }
+
+    func testBrowserBudgetUnwrapsTRPCAndMatchesSharedNativeBudget() throws {
+        let fields = #"{"api_budget":{"usage_percentage":0,"initial_budget":30,"currency":"USD"},"vibe_budget":{"usage_percentage":25,"initial_budget":120,"currency":"USD","reset_at":"2026-12-01T00:00:00Z"}}"#
+        let browser = try SubscriptionParser.parseBrowserBudgetJSON(Data("{\"result\":{\"data\":{\"json\":\(fields)}}}".utf8))
+        let native = try SubscriptionParser.parseBudgetJSON(Data(fields.utf8))
+        XCTAssertEqual(browser, native)
+        XCTAssertNil(browser.api)
+        XCTAssertEqual(browser.vibe?.total, 120)
+        XCTAssertEqual(browser.vibe?.used, 30)
+        XCTAssertEqual(browser.vibe?.remaining, 90)
+        XCTAssertEqual(browser.vibe?.resetsAt, "2026-12-01T00:00:00Z")
+    }
+
+    func testBrowserBudgetDoesNotUseLegacyAPIWhenSharedBudgetIsUnavailable() throws {
+        let api = #""api_budget":{"usage_percentage":0,"initial_budget":30,"currency":"USD"}"#
+        let vibes: [String?] = [nil, "null",
+            #"{"usage_percentage":0,"initial_budget":0,"currency":"USD"}"#,
+            #"{"usage_percentage":0,"initial_budget":"invalid","currency":"USD"}"#]
+        for vibe in vibes {
+            let fields = api + (vibe.map { ",\"vibe_budget\":\($0)" } ?? "")
+            let data = Data("{\"result\":{\"data\":{\"json\":{\(fields)}}}}".utf8)
+            XCTAssertThrowsError(try SubscriptionParser.parseBrowserBudgetJSON(data)) { error in
+                guard case MistralError.missingAllowance = error else { return XCTFail("Unexpected error: \(error)") }
+            }
+        }
+    }
+
+    func testBrowserBudgetPreservesZeroAndOverLimitUsage() throws {
+        for percent in [0.0, 125.0] {
+            let data = Data("{\"result\":{\"data\":{\"json\":{\"vibe_budget\":{\"usage_percentage\":\(percent),\"initial_budget\":120,\"currency\":\"USD\"}}}}}".utf8)
+            let usage = try SubscriptionParser.parseBrowserBudgetJSON(data)
+            XCTAssertEqual(usage.vibe?.usedPercent, percent)
+            XCTAssertEqual(usage.vibe?.used, 120 * percent / 100)
+            XCTAssertEqual(usage.vibe?.remaining, max(0, 120 - 120 * percent / 100))
+        }
+    }
+
+    func testBrowserBudgetRejectsMalformedOrErrorEnvelopes() {
+        for text in ["{}", "[]", "<html>Sign in</html>",
+                     #"{"vibe_budget":{"usage_percentage":0,"initial_budget":120,"currency":"USD"}}"#,
+                     #"{"result":{"data":null}}"#,
+                     #"{"error":{"json":{"message":"fixture-private-error"}}}"#] {
+            XCTAssertThrowsError(try SubscriptionParser.parseBrowserBudgetJSON(Data(text.utf8))) { error in
+                guard case MistralError.invalidResponse = error else { return XCTFail("Unexpected error: \(error)") }
+                XCTAssertFalse(error.localizedDescription.contains("fixture-private-error"))
+            }
+        }
     }
 
     func testCookieDatabaseReadsOnlyCurrentAdminCookies() throws {
@@ -195,7 +299,12 @@ final class UsageTests: XCTestCase {
         INSERT INTO cookies VALUES ('.other.ai','other','secret',X'','/',0,1);
         INSERT INTO cookies VALUES ('.mistral.ai','expired','secret',X'','/',1,1);
         INSERT INTO cookies VALUES ('chat.mistral.ai','chatonly','secret',X'','/',0,1);
-        INSERT INTO cookies VALUES ('admin.mistral.ai','otherpath','secret',X'','/api',0,1);
+        INSERT INTO cookies VALUES ('admin.mistral.ai','api_path','scoped',X'','/api',0,1);
+        INSERT INTO cookies VALUES ('admin.mistral.ai','trpc_path','scoped',X'','/api/local-trpc/',0,1);
+        INSERT INTO cookies VALUES ('admin.mistral.ai','exact_path','scoped',X'','/api/local-trpc/billing.budget',0,1);
+        INSERT INTO cookies VALUES ('admin.mistral.ai','otherpath','secret',X'','/subscription',0,1);
+        INSERT INTO cookies VALUES ('admin.mistral.ai','other_api','secret',X'','/api/local-trpc/other',0,1);
+        INSERT INTO cookies VALUES ('admin.mistral.ai','prefix_only','secret',X'','/api/local-trp',0,1);
         INSERT INTO cookies VALUES ('admin.mistral.ai','csrftoken','csrf',X'','/',0,1);
         """
         XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
@@ -206,6 +315,9 @@ final class UsageTests: XCTestCase {
         }
         XCTAssertTrue(header.contains("ory_session_test=valid"))
         XCTAssertTrue(header.contains("csrftoken=csrf"))
+        XCTAssertTrue(header.contains("api_path=scoped"))
+        XCTAssertTrue(header.contains("trpc_path=scoped"))
+        XCTAssertTrue(header.contains("exact_path=scoped"))
         XCTAssertFalse(header.contains("secret"))
     }
 
